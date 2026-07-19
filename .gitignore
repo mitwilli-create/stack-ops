@@ -1,0 +1,39 @@
+# ─────────────────────────────────────────────────────────────
+# stack-ops .gitignore — this repo is intended to become PUBLIC.
+# The private/ layer + secret patterns below must NEVER be tracked.
+# NOTE: .gitignore is a floor, not the gate. Before ANY push, a
+# secret scan (gitleaks/trufflehog or a key-pattern grep over the
+# full tree AND git history) + Mitchell's file-list review is
+# MANDATORY. See private/HANDOVER.md § public-repo publishing gate.
+# ─────────────────────────────────────────────────────────────
+
+# ── Private layer: personal, confidential, pointers — never publish ──
+private/
+NOTES.md
+*.private.md
+*.local.md
+
+# ── Secrets & credentials (defense in depth; values must never exist here) ──
+.env
+.env.*
+*.env
+.secrets
+.secrets/
+api-keys*
+*credentials*
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+service-account*.json
+
+# ── Tooling / OS cruft ──
+.DS_Store
+node_modules/
+.venv/
+__pycache__/
+*.log
+.vscode/
+.idea/

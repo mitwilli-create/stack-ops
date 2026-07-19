@@ -1,0 +1,54 @@
+{
+  "_comment": "MCP wiring template for stack-ops. Copy to a project's .mcp.json (Claude Code) or .cursor/mcp.json (Cursor) and KEEP THE ACTIVE SET TIGHT per docs/mcp-layer.md (tool-spam degrades tool-selection). Values shown as ${ENV_VAR} are read from the environment — never inline a key. Servers needing OAuth (Google Workspace, Sentry remote, Notion) are authorized once via the client, not via a key here.",
+
+  "mcpServers": {
+    "council": {
+      "command": "node",
+      "args": ["src/mcp/council-server.mjs"],
+      "env": { "COUNCIL_ENGINE_PATH": "${COUNCIL_ENGINE_PATH}" },
+      "_note": "own-tool wrap #1. COUNCIL_ENGINE_PATH points at the council engine; set it in the env or private/mcp-config.mjs (gitignored)."
+    },
+
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "${PROJECT_ROOT}"]
+    },
+    "fetch": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-fetch"]
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+    },
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"]
+    },
+    "serena": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/oraios/serena", "serena", "start-mcp-server"]
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"]
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@github/github-mcp-server"],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}" }
+    },
+
+    "_domain_activate_per_project": {
+      "exa": { "command": "npx", "args": ["-y", "exa-mcp-server"], "env": { "EXA_API_KEY": "${EXA_API_KEY}" } },
+      "obsidian": { "command": "npx", "args": ["-y", "mcp-obsidian"], "env": { "OBSIDIAN_API_KEY": "${OBSIDIAN_API_KEY}", "OBSIDIAN_HOST": "${OBSIDIAN_HOST}" } },
+      "elevenlabs": { "command": "uvx", "args": ["elevenlabs-mcp"], "env": { "ELEVENLABS_API_KEY": "${ELEVENLABS_API_KEY}" } },
+      "cloudflare": { "command": "npx", "args": ["-y", "@cloudflare/mcp-server-cloudflare"], "env": { "CLOUDFLARE_API_TOKEN": "${CLOUDFLARE_API_TOKEN}" } },
+      "firecrawl": { "command": "npx", "args": ["-y", "firecrawl-mcp"], "env": { "FIRECRAWL_API_KEY": "${FIRECRAWL_API_KEY}" } },
+      "apify": { "command": "npx", "args": ["-y", "apify-mcp-server"], "env": { "APIFY_TOKEN": "${APIFY_TOKEN}" } },
+      "sentry": { "url": "https://mcp.sentry.dev/mcp", "_note": "remote MCP, OAuth in-client" },
+      "notion": { "command": "npx", "args": ["-y", "@notionhq/notion-mcp-server"], "env": { "NOTION_TOKEN": "${NOTION_TOKEN}" } },
+      "google-workspace": { "url": "https://<google-official-remote-mcp>", "_note": "Google's OFFICIAL remote Workspace MCP (Gmail/Drive/Calendar), OAuth in-client. Do NOT build a custom Gmail wrapper." }
+    }
+  }
+}

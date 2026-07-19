@@ -1,0 +1,7 @@
+extends: existence
+message: "Em dash BANNED in outward materials (Mitchell voice rule) — rewrite with a period, comma, colon, or parentheses."
+level: error
+nonword: true
+tokens:
+  - '—'
+  - '–'

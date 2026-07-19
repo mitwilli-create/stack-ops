@@ -1,0 +1,20 @@
+extends: existence
+message: "Anti-slop: '%s' reads as hype/slop or a banned word — cut it or replace with a concrete fact or trade-off."
+level: warning
+ignorecase: true
+tokens:
+  - kill
+  - leverage
+  - seamless(ly)?
+  - robust
+  - cutting[- ]edge
+  - game[- ]chang(er|ing)
+  - synerg(y|ies)
+  - unlock(s|ing)?
+  - delve
+  - tapestry
+  - testament to
+  - "in today's [a-z-]{2,20} landscape"
+  - best[- ]in[- ]class
+  - revolutioniz(e|ing)
+  - supercharg(e|ing|ed)
