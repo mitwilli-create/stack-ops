@@ -28,9 +28,9 @@
  *
  * Exit 0 = all good. Exit 1 = at least one problem. Exit 2 = could not run.
  */
-import { readFileSync, existsSync, statSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, writeFileSync, mkdtempSync, mkdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { resolve, dirname, isAbsolute, join } from 'node:path';
+import { resolve, dirname, isAbsolute, join, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const VAR_RE = /\$\{([A-Z0-9_]+)\}/g;
@@ -76,7 +76,13 @@ export function checkConfig(path, env = process.env) {
     return [`${path}: no mcpServers object`];
   }
 
-  const baseDir = dirname(resolve(path));
+  // MCP clients launch stdio servers with cwd = the PROJECT ROOT, not the
+  // config file's directory. For a root-level .mcp.json these are the same
+  // directory; for .cursor/mcp.json (or .claude/) the root is the parent. A
+  // relative script arg is valid if it resolves under any candidate root.
+  const configDir = dirname(resolve(path));
+  const roots = [configDir];
+  if (basename(configDir).startsWith('.')) roots.push(dirname(configDir));
 
   for (const [name, cfg] of Object.entries(servers)) {
     if (isDocKey(name) || !cfg || typeof cfg !== 'object') continue;
@@ -115,9 +121,10 @@ export function checkConfig(path, env = process.env) {
         if (typeof arg !== 'string') continue;
         if (!/\.(mjs|js|cjs|py|ts)$/.test(arg)) continue;
         if (arg.includes('${')) continue; // unresolved, already reported above
-        const full = isAbsolute(arg) ? arg : resolve(baseDir, arg);
-        if (!existsSync(full) || !statSync(full).isFile()) {
-          problems.push(`${path} [${name}]: script arg "${arg}" does not exist at ${full}`);
+        const candidates = isAbsolute(arg) ? [arg] : roots.map((r) => resolve(r, arg));
+        const found = candidates.some((c) => existsSync(c) && statSync(c).isFile());
+        if (!found) {
+          problems.push(`${path} [${name}]: script arg "${arg}" not found (looked in: ${candidates.join(', ')})`);
         }
       }
     }
@@ -142,7 +149,7 @@ function selfTest() {
     ['unset var', { mcpServers: { a: { command: 'node', args: ['x.mjs'], env: { K: '${DEFINITELY_UNSET_VAR_XYZ}' } } } }, /is unset/],
     ['placeholder url', { mcpServers: { a: { url: 'https://<placeholder>/mcp' } } }, /placeholder/],
     ['missing command', { mcpServers: { a: { command: 'not-a-real-binary-xyz', args: [] } } }, /not on PATH/],
-    ['missing script', { mcpServers: { a: { command: 'node', args: ['nope-does-not-exist.mjs'] } } }, /does not exist/],
+    ['missing script', { mcpServers: { a: { command: 'node', args: ['nope-does-not-exist.mjs'] } } }, /not found/],
     ['no transport', { mcpServers: { a: { env: {} } } }, /neither/],
   ];
 
@@ -163,6 +170,21 @@ function selfTest() {
   const cleanOk = cleanProblems.length === 0;
   console.log(`  ${cleanOk ? 'ok  ' : 'FAIL'}: "clean config" -> ${cleanOk ? 'no false positives' : JSON.stringify(cleanProblems)}`);
   if (!cleanOk) failures++;
+
+  // A config inside a dotdir must resolve script args against the PARENT
+  // (the project root), the way Cursor and Claude Code actually launch them.
+  // Without this, a valid .cursor/mcp.json reports a false "script not found".
+  const dotDir = join(dir, '.cursor');
+  mkdirSync(dotDir, { recursive: true });
+  writeFileSync(join(dir, 'server.mjs'), '// stub');
+  const dotCfg = join(dotDir, 'mcp.json');
+  writeFileSync(dotCfg, JSON.stringify({ mcpServers: { s: { command: 'node', args: ['server.mjs'] } } }));
+  const dotProblems = checkConfig(dotCfg, { });
+  // The stub command "node" resolves on PATH; the only thing under test is the
+  // relative script arg, which lives at the parent, not inside .cursor.
+  const dotOk = !dotProblems.some((p) => /not found/.test(p));
+  console.log(`  ${dotOk ? 'ok  ' : 'FAIL'}: "dotdir resolves to project root" -> ${dotOk ? 'found via parent' : JSON.stringify(dotProblems)}`);
+  if (!dotOk) failures++;
 
   return failures;
 }
