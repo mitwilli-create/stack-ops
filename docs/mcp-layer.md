@@ -41,6 +41,7 @@ Measured footprint in tokens, from the live probe.
 | **ElevenLabs** | 27 | 17,363 | Voice work. Key present. Project-scoped to voice-os and content-ops. |
 | **council** (own wrap) | 3 | 380 | Routing policy, read-only, no spend. Effectively free. |
 | **career-ops** (own wrap) | 3 | 403 | Built Session 8. `queue_status`, `triage_next`, gated `apply_pack`. |
+| **Notion** | 24 | 19,054 | Enabled 2026-07-20. Second-largest server in the set, so it stays out of the Cursor profile. Key verified live. |
 | **media** (own wrap) | 4 | 626 | Built Session 8. Policy by default, spends only on explicit confirm. |
 
 ### Replaced by a CLI
@@ -58,7 +59,6 @@ Measured footprint in tokens, from the live probe.
 |---|---|
 | Obsidian | Obsidian is not installed and there is no vault. The most-linked server (`MarkusPfundstein/mcp-obsidian`) is abandoned with 85 open issues, and the Smithery package 404s. If adopted later, use `@bitbonsai/mcpvault`, or just point a filesystem server at the vault, since it is a folder of Markdown. |
 | Sentry | No key, no monitored production service. Re-add when one exists; it supports `?skills=` scoping to control tool count. |
-| Notion | Ruled "drop for now" (2026-07-20). Key exists but Notion is not installed and nothing references it. 19,054 tokens, the second-largest server measured. Config kept below, inactive. |
 | Apify | No token. 11,376 tokens, and it overlaps Firecrawl. |
 | Firecrawl | No key. 17,464 tokens. |
 | Exa | No key. Cheapest search server measured at 550 tokens; adopt when a key exists. |
@@ -96,8 +96,8 @@ Per Cloudflare's own Claude Code guidance:
 
 | Project | Servers |
 |---|---|
-| stack-ops | github, serena, context7, council |
-| career-ops | github, serena, context7, council, career-ops, Google Workspace (once configured) |
+| stack-ops | github, serena, context7, council, notion |
+| career-ops | github, serena, context7, council, career-ops, notion, Google Workspace (once configured). **Blocked: career-ops is a frozen working tree, so its `.mcp.json` was not edited.** Apply when the freeze lifts. |
 | voice-os / content-ops | serena, context7, council, media, elevenlabs |
 | storytellermitch.com | playwright, cloudflare (Code Mode), media |
 

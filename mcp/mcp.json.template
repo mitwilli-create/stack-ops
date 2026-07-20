@@ -34,6 +34,13 @@
       "args": ["-y", "@upstash/context7-mcp"]
     },
 
+    "notion": {
+      "command": "npx",
+      "args": ["-y", "@notionhq/notion-mcp-server"],
+      "env": { "NOTION_TOKEN": "${NOTION_API_KEY}" },
+      "_note": "24 tools / ~19054 tok, the second-largest server in the set. NOTE THE NAME MISMATCH: the server reads NOTION_TOKEN, the vault stores NOTION_API_KEY, so the mapping above is required. Key verified live (HTTP 200 on /users/me) 2026-07-20. Too large for the Cursor profile."
+    },
+
     "council": {
       "command": "node",
       "args": ["src/mcp/council-server.mjs"],
@@ -80,7 +87,7 @@
       "firecrawl": { "command": "npx", "args": ["-y", "firecrawl-mcp"], "env": { "FIRECRAWL_API_KEY": "${FIRECRAWL_API_KEY}" }, "_measured": "26 tools / ~17464 tok" },
       "apify": { "command": "npx", "args": ["-y", "@apify/actors-mcp-server"], "env": { "APIFY_TOKEN": "${APIFY_TOKEN}" }, "_measured": "10 tools / ~11376 tok", "_note": "the templated name apify-mcp-server was a 404; this is the real package" },
       "sentry": { "type": "http", "url": "https://mcp.sentry.dev/mcp", "_measured": "9 tools / ~7008 tok", "_note": "OAuth in-client. Supports ?skills=inspect,triage to control tool count." },
-      "notion": { "command": "npx", "args": ["-y", "@notionhq/notion-mcp-server"], "env": { "NOTION_TOKEN": "${NOTION_TOKEN}" }, "_measured": "24 tools / ~19054 tok", "_note": "Key EXISTS, but ruled drop-for-now 2026-07-20: Notion is not installed and nothing references it." }
+      "_note_notion": "Notion was ENABLED 2026-07-20, superseding the earlier drop-for-now ruling. It now lives in the active block above, not here."
     },
 
     "_dropped_use_the_cli_instead": {
