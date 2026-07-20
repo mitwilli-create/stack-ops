@@ -34,6 +34,11 @@
       "command": "npx",
       "args": ["-y", "@notionhq/notion-mcp-server"],
       "env": { "NOTION_TOKEN": "${NOTION_API_KEY}" }
+    },
+    "exa": {
+      "command": "npx",
+      "args": ["-y", "exa-mcp-server"],
+      "env": { "EXA_API_KEY": "${EXA_API_KEY}" }
     }
   }
 }
