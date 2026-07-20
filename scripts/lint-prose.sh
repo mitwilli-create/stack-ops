@@ -20,6 +20,22 @@ status=0
 # EmDash.yml legitimately contains the banned characters: they are its tokens.
 EXCLUDE_RE='^styles/VoiceOS/EmDash\.yml$'
 
+# ONE definition of what a banned dash is, called by step 2 (the real sweep) and
+# by step 4 (the probe that proves the sweep works). Do not re-type the grep in
+# either place. On 2026-07-20 step 4 duplicated the expression, so reverting the
+# matcher broke the sweep AND the probe together and step 4 still reported ok.
+# A self-test that restates its subject cannot detect a shared break; it has to
+# call it. That is the whole reason this is a function.
+#
+# Two -e patterns rather than one '\|' alternation. The '\|' form was CORRECT
+# under this script's bash shebang and is not a bug: bash keeps the backslash
+# and grep reads BRE alternation. It is only wrong if you retype it into zsh,
+# which strips the backslash and leaves a literal pipe. That difference burned
+# an hour, so the form that means the same thing in both shells wins.
+dash_match() {
+  LC_ALL=C grep -Hn -e $'\xe2\x80\x94' -e $'\xe2\x80\x93' "$@"
+}
+
 echo "==> 1/4  Vale (prose: md, mdc, txt)"
 if command -v vale >/dev/null 2>&1; then
   vale --glob='!node_modules/**' . || status=1
@@ -34,7 +50,7 @@ while IFS= read -r f; do
   case "$f" in private/*) continue ;; esac
   [[ "$f" =~ $EXCLUDE_RE ]] && continue
   [ -f "$f" ] || continue
-  if LC_ALL=C grep -Hn $'\xe2\x80\x94\|\xe2\x80\x93' "$f"; then
+  if dash_match "$f"; then
     hits=$((hits + 1))
   fi
 done < <(git ls-files)
@@ -110,10 +126,43 @@ else
       printf '%s\n' "$probe_out" >&2
       status=1
     else
-      echo "    ok: '$bad_word' + typographic apostrophe -> exit $probe_rc, $n_hits hits"
+      echo "    ok: vale '$bad_word' + typographic apostrophe -> exit $probe_rc, $n_hits hits"
     fi
   fi
 fi
+
+# Mechanism 2 needs its own probe. Vale reads md/mdc/txt only, so dash_match is
+# the ONLY dash enforcement on code, YAML, and shell, and nothing else covers
+# for it if it breaks.
+#
+# These call dash_match, the same function step 2 sweeps with. That is the
+# point: break the matcher and this fails, because there is one definition to
+# break. The earlier version restated the grep and therefore certified itself.
+echo "    (dash matcher)"
+probe_dash() { printf "$1" > "$PROBE"; dash_match "$PROBE" >/dev/null 2>&1; }
+
+if probe_dash 'a \xe2\x80\x94 b\n'; then
+  if probe_dash 'a \xe2\x80\x93 b\n'; then
+    if probe_dash 'a - b\n'; then
+      echo "    BROKEN: dash_match flagged an ASCII hyphen; it is over-matching." >&2
+      echo "    Every file with a normal hyphen now fails, which trains bypassing." >&2
+      status=1
+    else
+      echo "    ok: dash_match catches em + en, ignores ASCII hyphen"
+    fi
+  else
+    echo "    BROKEN: dash_match caught an em dash but missed an en dash." >&2
+    echo "    Step 2 is half blind. Check both -e patterns in dash_match." >&2
+    status=1
+  fi
+else
+  echo "    BROKEN: dash_match did not match a literal em dash." >&2
+  echo "    Step 2 is reporting 'clean' for every file, including bad ones." >&2
+  echo "    Check dash_match, and check it by RUNNING THIS SCRIPT, not by" >&2
+  echo "    retyping its grep into zsh: bash and zsh disagree on \$'\\|'." >&2
+  status=1
+fi
+
 rm -f "$PROBE"
 trap - EXIT
 
