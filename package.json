@@ -6,7 +6,9 @@
   "description": "Automatic, research-validated model-triage system for a multi-vendor AI stack.",
   "scripts": {
     "test": "node --test src/**/*.test.mjs",
-    "gate": "node src/router/cli.mjs"
+    "gate": "node src/router/cli.mjs",
+    "check:mcp": "node scripts/check-mcp-config.mjs",
+    "check:mcp:selftest": "node scripts/check-mcp-config.mjs --self-test"
   },
   "engines": {
     "node": ">=20"

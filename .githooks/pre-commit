@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
-# Blocking prose gate. Ruled 2026-07-20 (low-cog interview, item 4).
-# Committed via core.hooksPath so it travels with the repo instead of living
-# only on one machine. Baseline is clean, so this only fires on NEW
-# violations. Bypass with --no-verify when you mean it.
-exec "$(git rev-parse --show-toplevel)/scripts/lint-prose.sh"
+# Blocking gates. Ruled 2026-07-20 (low-cog interview, item 4).
+# Committed via core.hooksPath so they travel with the repo instead of living
+# only on one machine. Bypass with --no-verify when you mean it.
+set -e
+root="$(git rev-parse --show-toplevel)"
+
+# 1. Prose gate (Vale + byte-level dash sweep).
+"$root/scripts/lint-prose.sh"
+
+# 2. MCP config preflight. Added after a .mcp.json shipped with three unset
+#    ${VAR} references that failed SILENTLY: the literal "${VAR}" string is
+#    passed through, so servers start and misbehave rather than erroring.
+node "$root/scripts/check-mcp-config.mjs" "$root/.mcp.json"
