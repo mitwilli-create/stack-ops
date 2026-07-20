@@ -1,54 +1,97 @@
 {
-  "_comment": "MCP wiring template for stack-ops. Copy to a project's .mcp.json (Claude Code) or .cursor/mcp.json (Cursor) and KEEP THE ACTIVE SET TIGHT per docs/mcp-layer.md (tool-spam degrades tool-selection). Values shown as ${ENV_VAR} are read from the environment, never inline a key. Servers needing OAuth (Google Workspace, Sentry remote, Notion) are authorized once via the client, not via a key here.",
+  "_comment": "MCP wiring template for stack-ops. Revised 2026-07-20 (Session 8) against MEASURED footprints; see docs/mcp-cli-audit.md. Copy the servers you want into a project's .mcp.json (Claude Code) or .cursor/mcp.json (Cursor) per the activation matrix in docs/mcp-layer.md. Values shown as ${ENV_VAR} are read from the environment; never inline a key value. CURSOR WARNING: Cursor caps at ~40 tools across ALL servers and drops the overflow SILENTLY, so use the reduced Cursor profile, not this whole file.",
+
+  "_measured_2026_07_20": {
+    "github(default)": "44 tools / ~28918 tok",
+    "github(read-only + repos,pull_requests)": "16 tools / ~9240 tok",
+    "serena": "21 tools / ~6320 tok",
+    "playwright": "24 tools / ~4617 tok",
+    "context7": "2 tools / ~1230 tok",
+    "council": "3 tools / ~380 tok",
+    "career-ops": "3 tools / ~403 tok",
+    "media": "4 tools / ~626 tok"
+  },
 
   "mcpServers": {
-    "council": {
-      "command": "node",
-      "args": ["src/mcp/council-server.mjs"],
-      "env": { "COUNCIL_ENGINE_PATH": "${COUNCIL_ENGINE_PATH}" },
-      "_note": "own-tool wrap #1. COUNCIL_ENGINE_PATH points at the council engine; set it in the env or private/mcp-config.mjs (gitignored)."
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer ${GITHUB_TOKEN}",
+        "X-MCP-Readonly": "true",
+        "X-MCP-Toolsets": "repos,pull_requests"
+      },
+      "_note": "The npm package @github/github-mcp-server DOES NOT EXIST (404). GitHub ships a Go binary, a Docker image, and this remote server. Read-only is a safety property as well as a token one: it disables write tools even when a toolset asks for them, and Mitchell's token carries delete_repo. Writes go through the gh CLI. This is an HTTP server, and HTTP servers have shipped bugs where deferral did not apply, so the narrow config is load-bearing."
     },
 
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "${PROJECT_ROOT}"]
+    "serena": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/oraios/serena", "serena", "start-mcp-server", "--context", "ide-assistant", "--project", "${PROJECT_ROOT}"]
     },
-    "fetch": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-fetch"]
-    },
-    "sequential-thinking": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
-    },
+
     "context7": {
       "command": "npx",
       "args": ["-y", "@upstash/context7-mcp"]
     },
-    "serena": {
-      "command": "uvx",
-      "args": ["--from", "git+https://github.com/oraios/serena", "serena", "start-mcp-server"]
-    },
-    "playwright": {
-      "command": "npx",
-      "args": ["-y", "@playwright/mcp@latest"]
-    },
-    "github": {
-      "command": "npx",
-      "args": ["-y", "@github/github-mcp-server"],
-      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}" }
+
+    "council": {
+      "command": "node",
+      "args": ["src/mcp/council-server.mjs"],
+      "env": { "COUNCIL_ENGINE_PATH": "${COUNCIL_ENGINE_PATH}" },
+      "_note": "own-wrap #1. Read-only routing policy, no spend."
     },
 
-    "_domain_activate_per_project": {
-      "exa": { "command": "npx", "args": ["-y", "exa-mcp-server"], "env": { "EXA_API_KEY": "${EXA_API_KEY}" } },
-      "obsidian": { "command": "npx", "args": ["-y", "mcp-obsidian"], "env": { "OBSIDIAN_API_KEY": "${OBSIDIAN_API_KEY}", "OBSIDIAN_HOST": "${OBSIDIAN_HOST}" } },
-      "elevenlabs": { "command": "uvx", "args": ["elevenlabs-mcp"], "env": { "ELEVENLABS_API_KEY": "${ELEVENLABS_API_KEY}" } },
-      "cloudflare": { "command": "npx", "args": ["-y", "@cloudflare/mcp-server-cloudflare"], "env": { "CLOUDFLARE_API_TOKEN": "${CLOUDFLARE_API_TOKEN}" } },
-      "firecrawl": { "command": "npx", "args": ["-y", "firecrawl-mcp"], "env": { "FIRECRAWL_API_KEY": "${FIRECRAWL_API_KEY}" } },
-      "apify": { "command": "npx", "args": ["-y", "apify-mcp-server"], "env": { "APIFY_TOKEN": "${APIFY_TOKEN}" } },
-      "sentry": { "url": "https://mcp.sentry.dev/mcp", "_note": "remote MCP, OAuth in-client" },
-      "notion": { "command": "npx", "args": ["-y", "@notionhq/notion-mcp-server"], "env": { "NOTION_TOKEN": "${NOTION_TOKEN}" } },
-      "google-workspace": { "url": "https://<google-official-remote-mcp>", "_note": "Google's OFFICIAL remote Workspace MCP (Gmail/Drive/Calendar), OAuth in-client. Do NOT build a custom Gmail wrapper." }
+    "career-ops": {
+      "command": "node",
+      "args": ["src/mcp/career-ops-server.mjs"],
+      "env": { "CAREER_OPS_PATH": "${CAREER_OPS_PATH}" },
+      "_note": "own-wrap #2. queue_status and triage_next are read-only; apply_pack WRITES FILES and refuses without confirm:true. Activate in career-ops only."
+    },
+
+    "media": {
+      "command": "node",
+      "args": ["src/mcp/media-server.mjs"],
+      "env": { "COUNCIL_ENGINE_PATH": "${COUNCIL_ENGINE_PATH}" },
+      "_note": "own-wrap #3. Every tool resolves policy only and refuses to dispatch without confirm:true AND a present credential. Activate in voice-os / content-ops / storytellermitch."
+    },
+
+    "_project_scoped": {
+      "playwright": {
+        "command": "npx",
+        "args": ["-y", "@playwright/mcp@latest"],
+        "_note": "UI repos only. Required for the screenshot verification in git-shipping-safety."
+      },
+      "cloudflare": {
+        "type": "http",
+        "url": "https://mcp.cloudflare.com/mcp",
+        "_note": "Code Mode: two tools (search, execute) covering 2500+ endpoints. OAuth in-client. Pair with the wrangler/cloudflared CLIs and the cloudflare/skills plugin. This SUPERSEDES own-wrap #4, which should not be built."
+      },
+      "elevenlabs": {
+        "command": "uvx",
+        "args": ["elevenlabs-mcp"],
+        "env": { "ELEVENLABS_API_KEY": "${ELEVENLABS_API_KEY}" },
+        "_note": "27 tools / ~17363 tok. voice-os and content-ops only. Key present in the vault."
+      }
+    },
+
+    "_inactive_pending_credentials": {
+      "_note": "Config is correct and ready; each needs a key Mitchell must acquire. See private/credentials-needed.md.",
+      "exa": { "command": "npx", "args": ["-y", "exa-mcp-server"], "env": { "EXA_API_KEY": "${EXA_API_KEY}" }, "_measured": "2 tools / ~550 tok" },
+      "firecrawl": { "command": "npx", "args": ["-y", "firecrawl-mcp"], "env": { "FIRECRAWL_API_KEY": "${FIRECRAWL_API_KEY}" }, "_measured": "26 tools / ~17464 tok" },
+      "apify": { "command": "npx", "args": ["-y", "@apify/actors-mcp-server"], "env": { "APIFY_TOKEN": "${APIFY_TOKEN}" }, "_measured": "10 tools / ~11376 tok", "_note": "the templated name apify-mcp-server was a 404; this is the real package" },
+      "sentry": { "type": "http", "url": "https://mcp.sentry.dev/mcp", "_measured": "9 tools / ~7008 tok", "_note": "OAuth in-client. Supports ?skills=inspect,triage to control tool count." },
+      "notion": { "command": "npx", "args": ["-y", "@notionhq/notion-mcp-server"], "env": { "NOTION_TOKEN": "${NOTION_TOKEN}" }, "_measured": "24 tools / ~19054 tok", "_note": "Key EXISTS, but ruled drop-for-now 2026-07-20: Notion is not installed and nothing references it." }
+    },
+
+    "_dropped_use_the_cli_instead": {
+      "filesystem": "native Read/Write/Edit/Glob/Grep. Was 14 tools / ~3243 tok for zero added capability.",
+      "fetch": "native WebFetch or curl. The templated npm package @modelcontextprotocol/server-fetch is a 404; the real one is `uvx mcp-server-fetch`.",
+      "sequential-thinking": "native extended thinking supersedes it.",
+      "obsidian": "not installed, no vault. If adopted, prefer @bitbonsai/mcpvault; MarkusPfundstein/mcp-obsidian is abandoned."
+    },
+
+    "_not_configurable_here": {
+      "google-workspace": "NOT a single URL. Enable gmailmcp / drivemcp / calendarmcp / chatmcp services in a Google Cloud project, create an OAuth client, then add it to Claude as a CUSTOM CONNECTOR via the claude.ai interface, not via this file. See private/credentials-needed.md."
     }
   }
 }

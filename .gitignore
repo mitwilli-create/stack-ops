@@ -37,3 +37,6 @@ __pycache__/
 *.log
 .vscode/
 .idea/
+
+# Serena MCP per-project cache (regenerated on demand)
+.serena/
