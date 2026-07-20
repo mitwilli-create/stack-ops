@@ -4,7 +4,9 @@
 # Verify:     node scripts/gen-antislop.mjs --check
 extends: existence
 message: "Anti-slop: '%s' reads as hype/slop or a banned word. Cut it or replace with a concrete fact or trade-off."
-level: warning
+# error, not warning: Vale exits 0 on warnings, so a warning-level rule prints
+# violations and then lets scripts/lint-prose.sh report PASS. Matches EmDash.yml.
+level: error
 ignorecase: true
 tokens:
   - 'i hope this email finds you well'
@@ -16,7 +18,7 @@ tokens:
   - 'synergy(s|es|ed|ing|ly)?'
   - 'deep dive'
   - 'at your earliest convenience'
-  - 'please don''t hesitate to reach out'
+  - 'please don[''’]t hesitate to reach out'
   - 'moving forward'
   - 'per my last email'
   - 'keep the lines of communication open'
@@ -31,7 +33,7 @@ tokens:
   - 'best-in-class(s|es|ed|ing|ly)?'
   - 'revolutionize(s|es|ed|ing|ly)?'
   - 'supercharge(s|es|ed|ing|ly)?'
-  - 'in today''s landscape'
+  - 'in today[''’]s landscape'
   - 'synergies(s|es|ed|ing|ly)?'
   - 'game changer'
   - 'game-changer(s|es|ed|ing|ly)?'

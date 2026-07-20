@@ -32,13 +32,20 @@ const TARGET = join(REPO, 'styles', 'VoiceOS', 'AntiSlop.yml');
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+// Vale's existence matcher does NOT normalize apostrophes: a token written
+// with ASCII ' (U+0027) never matches text using the typographic ' (U+2019),
+// which is what editors autocorrect to by default. The source list is ASCII,
+// so every apostrophe becomes a character class. Apply AFTER escapeRe; the
+// YAML single-quote doubling below then wraps it correctly.
+const flexApostrophe = (s) => s.replace(/'/g, "['’]");
+
 function buildTokens(raw) {
   return raw
     .split('\n')
     .map((l) => l.trim())
     .filter((l) => l && !l.startsWith('#'))
     .map((phrase) => {
-      const esc = escapeRe(phrase);
+      const esc = flexApostrophe(escapeRe(phrase));
       // Single words take a morphology group; multi-word phrases are matched
       // as written, since "circle backing" is not a thing.
       return /\s/.test(phrase) ? esc : `${esc}(s|es|ed|ing|ly)?`;
@@ -68,7 +75,9 @@ const yaml = `# GENERATED FILE, DO NOT EDIT BY HAND.
 # Verify:     node scripts/gen-antislop.mjs --check
 extends: existence
 message: "Anti-slop: '%s' reads as hype/slop or a banned word. Cut it or replace with a concrete fact or trade-off."
-level: warning
+# error, not warning: Vale exits 0 on warnings, so a warning-level rule prints
+# violations and then lets scripts/lint-prose.sh report PASS. Matches EmDash.yml.
+level: error
 ignorecase: true
 tokens:
 ${tokens.map((t) => `  - '${t.replace(/'/g, "''")}'`).join('\n')}
