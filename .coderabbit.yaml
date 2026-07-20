@@ -1,0 +1,61 @@
+# .coderabbit.yaml — stack-wide baseline, scaffolded 2026-07-19 from career-ops's
+# churn-tuned config (decision G: CodeRabbit is always-on on every repo).
+# Greptile (complex repos) + Qodo merge-gate (production-critical repos) are
+# GitHub-App / dashboard + branch-protection configured, NOT repo files —
+# see stack-ops/docs/qa-tiering.md for the per-repo tier assignment.
+#
+# "chill" profile keeps real-defect review at full strength while dropping the
+# nitpick tail; correctness / security / data-integrity are pinned to always-raise
+# via path_instructions regardless of profile.
+
+language: en
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  # decorative features off — per-round variance, never a defect
+  sequence_diagrams: false
+  suggested_labels: false
+  suggested_reviewers: false
+  related_issues: false
+  related_prs: false
+  auto_review:
+    enabled: true
+    drafts: false
+  path_filters:
+    # machine-generated / build outputs — review adds nothing
+    - "!**/package-lock.json"
+    - "!**/pnpm-lock.yaml"
+    - "!**/yarn.lock"
+    - "!**/flake.lock"
+    - "!**/dist/**"
+    - "!**/build/**"
+    - "!**/*-snapshots/**"
+  path_instructions:
+    - path: "**"
+      instructions: >-
+        Raise findings only for defects in code behavior. ALWAYS raise, at any
+        severity: correctness bugs (wrong output, unhandled edge cases, broken
+        control flow), security vulnerabilities (command injection, path
+        traversal, SSRF, secret exposure), and data-integrity risks (silent data
+        loss, corruption, schema or data-contract violations). Do NOT raise
+        process or workflow reminders rather than code defects — reminders to run
+        slash-commands or helper scripts, lane/file-ownership etiquette,
+        commit-message or PR-description conventions, or restating rules from
+        CLAUDE.md / AGENTS.md. If a finding would begin with "remember to",
+        "consider running", or "per the project's workflow", omit it.
+    - path: "**/*.mjs"
+      instructions: "Check for command injection, path traversal, and SSRF; ensure scripts handle missing files/dirs gracefully."
+    - path: "CLAUDE.md"
+      instructions: "This file controls agent behavior — review changes carefully for conflicts with existing instructions."
+
+knowledge_base:
+  code_guidelines:
+    enabled: false
+  learnings:
+    scope: local
+
+chat:
+  auto_reply: true

@@ -30,44 +30,93 @@ export const SIGNAL = Object.freeze({
   PII: 'pii',
   PRIVATE_PATH: 'private-path',
   EMPLOYER: 'employer-proprietary',
+  INFRA: 'infra-credential-exposure',
   AMBIGUOUS: 'ambiguous',
 });
 
-// ── Generic secret / credential patterns ────────────────────────────────────
-// Provider-prefixed tokens, PEM blocks, and NAME=value / key: value assignments.
-// Kept specific enough that ordinary prose/code does not trip them.
+// ─────────────────────────────────────────────────────────────────────────────
+// NARROWED 2026-07-19 to Mitchell's explicit ruling. Read this before widening
+// anything back: the previous gate was far broader and was costing money by
+// over-routing ordinary work to Anthropic.
+//
+// Ruled ALLOW — these route CHEAP and must NOT be gated: home address · phone ·
+// email · current employer · health information · relocation plans · layoff
+// status · financial details · general identity documents · unpublished
+// career/strategy material · third-party data (hm-intel notes, other people's
+// contact details) · the voice-os corpus · session transcripts · ~/.claude ·
+// career-ops and relocation-os generally. This was an informed decision after a
+// risk review, not an oversight. Do not re-gate them.
+//
+// The narrow gate DEPENDS on two controls that replace the gating he declined:
+//   (i)  zero-data-retention is mandatory on the cheap path (enforced by the
+//        caller/forwarder, not here — a provider that cannot honour zdr gets no
+//        cheap-path traffic at all); and
+//   (ii) THIS credential scanner, which is now load-bearing: with path gates
+//        this narrow it is the only control between a pasted key and a third
+//        party. It scans FULL content, never a sample.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Credential patterns — the load-bearing control ───────────────────────────
+// Every format below has a dedicated test in router.test.mjs. Add a format here
+// and add its test in the same change; this list is the security boundary.
 const SECRET_PATTERNS = [
-  /\b(?:sk|rk|pk)-[A-Za-z0-9]{16,}\b/,                         // OpenAI-style keys
+  /\b(?:sk|rk|pk)-[A-Za-z0-9_\-]{16,}/,                         // OpenAI-style (incl. sk-ant-, sk-proj-)
   /\bxai-[A-Za-z0-9]{16,}\b/,                                   // xAI
   /\bAKIA[0-9A-Z]{16}\b/,                                       // AWS access key id
+  /\bASIA[0-9A-Z]{16}\b/,                                       // AWS temporary key id
   /\bgh[pousr]_[A-Za-z0-9]{20,}\b/,                             // GitHub tokens
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/,                           // GitHub fine-grained PAT
   /\bAIza[0-9A-Za-z_\-]{20,}\b/,                                // Google API key
+  /\bAQ\.Ab[A-Za-z0-9_\-]{10,}/,                                // Google OAuth / AQ.Ab-prefixed token
+  /\bya29\.[A-Za-z0-9_\-]{20,}/,                                // Google OAuth access token
   /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/,                           // Slack tokens
-  /-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----/,                  // PEM private key
-  /\b(?:api[_-]?key|secret|bearer|access[_-]?token|client[_-]?secret|password|passwd)\b\s*[:=]\s*['"]?[A-Za-z0-9\-_.]{12,}/i,
-  /\b[A-Z][A-Z0-9_]{2,}_(?:API_KEY|APIKEY|TOKEN|SECRET|PASSWORD|KEY)\s*=\s*\S+/, // ENV_NAME=value
+  /-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----/,                   // PEM private key block
+  /\bAuthorization\s*:\s*Bearer\s+[A-Za-z0-9._\-]{16,}/i,       // bearer token in a header
+  /\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}/, // JWT
+  /\b(?:api[_-]?key|secret|bearer|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|totp[_-]?secret)\b\s*[:=]\s*['"]?[A-Za-z0-9\-_.]{12,}/i,
+  /\b[A-Z][A-Z0-9_]{2,}_(?:API_KEY|APIKEY|TOKEN|SECRET|PASSWORD|KEY)\s*=\s*\S+/, // .env-style ENV_NAME=value
+  // Payment card numbers (Visa / Mastercard / Amex / Discover). Restored by
+  // interview 2026-07-19 and filed HERE, under credentials, rather than under PII.
+  // The distinction is the point: "financial details" (severance amount, salary
+  // band) are facts about Mitchell and route CHEAP by his ruling. A card number is
+  // a BEARER INSTRUMENT — whoever holds it can spend it — which puts it in the same
+  // class as an API key, not the same class as a salary figure. Asymmetric failure
+  // modes: a false positive costs one request routed to Anthropic; a false negative
+  // puts a live card number in a third party's logs.
+  /\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b/,
 ];
 
-// ── Generic PII patterns ─────────────────────────────────────────────────────
+// ── PII — collapsed to the two identifiers he still considers sensitive ──────
+// Everything else formerly here (email, phone, street address, credit card,
+// ID-document mentions) was REMOVED per the ruling. Do not reinstate without a
+// new ruling.
 const PII_PATTERNS = [
   /\b\d{3}-\d{2}-\d{4}\b/,                                      // US SSN
-  /\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b/,      // email address
-  /\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/,   // US phone number
-  /\b\d{1,5}\s+[A-Za-z0-9.\s]{3,30}\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Way|Place|Pl)\b/i, // street address
-  /\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b/, // credit card
-  /\b(?:passport|driver'?s? licen[cs]e|national id)\b/i,       // ID document mentions
+  /\bpassport\s*(?:no\.?|number|#)?\s*[:#]?\s*[A-Z0-9]{6,9}\b/i, // passport number
 ];
 
-// ── Generic private-path markers ─────────────────────────────────────────────
-// Personal specifics (exact repo names, apply-pack, hm-intel, etc.) come from the
-// private config; these are safe defaults that apply to any machine.
+// ── Private paths — only those that reliably hold credentials or NDA material ─
+// Removed per the ruling: the blanket /private/ marker, career-ops, relocation-os,
+// ~/.claude, and session transcripts. Kept: credential stores and shell rc files
+// that source the vault. Client/NDA and employer paths come from the private
+// config (they are personal specifics, not generic defaults).
 const DEFAULT_PRIVATE_PATH_PATTERNS = [
   /(?:^|\/)\.secrets(?:\/|$)/,
   /(?:^|\/)\.ssh(?:\/|$)/,
   /(?:^|[/\\])\.env(?:\.[\w-]+)?$/,
-  /(?:^|\/)private(?:\/|$)/,
+  /(?:^|\/)\.(?:zshrc|zshenv|zprofile|bash_profile|bashrc|profile)$/, // rc files that source the vault
   /\b(?:credentials|id_rsa|id_ed25519|service-account[\w-]*\.json)\b/,
   /\bapi-keys?\.env\b/,
+];
+
+// ── INFRA — kept, but the reason is CREDENTIAL EXPOSURE, not privacy ─────────
+// Secrets operations, the publish/secret-scan gate, and council infra config all
+// tend to quote key names and vault layout in-line.
+const DEFAULT_INFRA_PATTERNS = [
+  /\b(?:rotate|revoke|provision)\s+(?:the\s+)?(?:api\s+)?key\b/i,
+  /\bsecret[- ]scan\b|\bsecrets? (?:ops|operation|rotation|hardening)\b/i,
+  /\bsecrets-launchd-setenv\b|\blaunchctl setenv\b/i,
+  /\bvault\b.*\b(?:key|secret|token)\b/i,
 ];
 
 // After this date Mitchell's Google access ends; before it, employer-proprietary
@@ -97,6 +146,7 @@ export function buildConfig(privateConfig = null, overrides = {}) {
     piiPatterns: [...PII_PATTERNS, ...(pc.piiPatterns || []), ...(overrides.piiPatterns || [])],
     privatePathPatterns: [...DEFAULT_PRIVATE_PATH_PATTERNS, ...(pc.privatePathPatterns || []), ...(overrides.privatePathPatterns || [])],
     employerPatterns: [...(pc.employerPatterns || []), ...(overrides.employerPatterns || [])],
+    infraPatterns: [...DEFAULT_INFRA_PATTERNS, ...(pc.infraPatterns || []), ...(overrides.infraPatterns || [])],
     // allowlist: patterns that, if they match a path, EXEMPT it from the private-path
     // signal (e.g. a public docs/ dir inside an otherwise-private repo). Never
     // exempts secret/PII/employer content — those deny regardless of path.
@@ -178,6 +228,11 @@ export function classify(input, config = buildConfig()) {
   const allowlisted = anyMatch(config.allowlist, pathBlob);
   const pathHit = anyMatch(config.privatePathPatterns, pathBlob) || anyMatch(config.privatePathPatterns, text);
   if (pathHit && !allowlisted) reasons.push({ signal: SIGNAL.PRIVATE_PATH, detail: `matched ${pathHit.source.slice(0, 48)}` });
+
+  // 5. Infra / secrets operations. Denies for credential-exposure reasons, not
+  //    privacy — this work quotes key names and vault layout inline.
+  const infraHit = anyMatch(config.infraPatterns || [], text);
+  if (infraHit) reasons.push({ signal: SIGNAL.INFRA, detail: `matched ${infraHit.source.slice(0, 48)}` });
 
   const sensitive = reasons.length > 0;
   return {

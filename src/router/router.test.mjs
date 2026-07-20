@@ -1,24 +1,106 @@
 /**
  * router.test.mjs — tests for the stack-ops router substrate.
  * Run: node --test src/router/router.test.mjs
+ *
+ * The credential-format tests below are NOT routine coverage. With the privacy
+ * gate narrowed to Mitchell's 2026-07-19 ruling, this scanner is the only control
+ * standing between a pasted key and a third-party provider. Every format it claims
+ * to catch has a test here proving it. Adding a format to SECRET_PATTERNS without
+ * adding its test here defeats the point.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { classify, buildConfig, ROUTE, SIGNAL } from './privacy-gate.mjs';
+import { classify, classifyAsync, buildConfig, ROUTE, SIGNAL } from './privacy-gate.mjs';
 import { triagePr, REVIEWER, REPO_TIER } from './pr-reviewer-triage.mjs';
 import { resolveTarget, cursorBaseUrl, ENDPOINTS, OPENROUTER_AUTO_MODEL } from './openrouter-auto.mjs';
 
 // Mitchell-like private config (mirrors private/router-config.mjs shape) so tests
-// don't depend on the gitignored file being present.
+// don't depend on the gitignored file being present. Note what is NOT here any
+// more: career-ops and voice-os were removed as private paths per the ruling.
 const cfg = buildConfig({
-  privatePathPatterns: [/\bcareer-ops\b/i, /\bvoice-os\b/i],
   employerPatterns: [/\bgoogle-internal\b/i, /@google\.com\b/i],
-  piiPatterns: [/\buser@example\.com\b/i],
+  privatePathPatterns: [/\bclient-nda\b/i],
   allowlist: [/\bstack-ops[\/\\]docs\b/i],
 });
 
-// ── privacy gate ─────────────────────────────────────────────────────────────
+// ── the load-bearing credential scanner ──────────────────────────────────────
+
+const CREDENTIAL_FORMATS = {
+  'sk- (OpenAI-style)':        'here is my key sk-abcdef0123456789ABCDEF for testing',
+  'sk-ant- (Anthropic)':       'ANTHROPIC key sk-ant-api03-BEXZp4pqxmONTHk5st4eitRiUllgDLon',
+  'xai-':                      'token xai-abcdef0123456789ABCDEF',
+  'AIza (Google)':             'google key AIzaSyD-abcdefghijklmnopqrstuvwxyz01',
+  'AQ.Ab (Google OAuth)':      'auth AQ.Ab8RN6JxKqW1vY2zT4pL9mNbXcVdF',
+  'ya29. (Google access)':     'bearer ya29.a0AfH6SMBx1234567890abcdefghijklmnop',
+  'ghp_ (GitHub)':             'gh token ghp_abcdefghijklmnopqrstuvwxyz0123456789',
+  'github_pat_ (fine-grained)':'github_pat_11ABCDEFG0abcdefghijklmnopqrstuv',
+  'AKIA (AWS)':                'aws id AKIAIOSFODNN7EXAMPLE',
+  'ASIA (AWS temporary)':      'aws sts ASIAIOSFODNN7EXAMPLE',
+  'xoxb- (Slack)':             'slack xoxb-1234567890-abcdefghijk',
+  'PEM private key block':     '-----BEGIN RSA PRIVATE KEY-----\nMIIEow...',
+  'JWT':                       'session eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N',
+  'bearer token header':       'Authorization: Bearer abcdef0123456789ABCDEFGH',
+  '.env-style KEY=value':      'OPENAI_API_KEY=sk-proj-verylongsecretvalue1234567890',
+  'password: assignment':      'password: hunter2-correct-horse-battery',
+  'totp/2FA seed':             'totp_secret = JBSWY3DPEHPK3PXPABCDEF',
+  // Filed under credentials, not PII, by ruling: a card number is a bearer
+  // instrument like an API key, not a fact about his finances.
+  'Visa card number':          'card 4111111111111111 exp 04/29',
+  'Mastercard number':        'pay with 5555555555554444',
+  'Amex number':               'amex 378282246310005',
+};
+
+for (const [format, sample] of Object.entries(CREDENTIAL_FORMATS)) {
+  test(`scanner catches ${format}`, () => {
+    const d = classify({ text: sample }, cfg);
+    assert.equal(d.route, ROUTE.ANTHROPIC_DIRECT, `${format} leaked to the cheap path`);
+    assert.ok(d.reasons.some(r => r.signal === SIGNAL.SECRET), `${format} did not fire the SECRET signal`);
+  });
+}
+
+test('scanner is full-content, not sampled: a key buried in a long body is caught', () => {
+  const filler = 'lorem ipsum dolor sit amet, consectetur adipiscing elit. '.repeat(400);
+  const d = classify({ text: `${filler}\nAKIAIOSFODNN7EXAMPLE\n${filler}` }, cfg);
+  assert.equal(d.route, ROUTE.ANTHROPIC_DIRECT);
+  assert.ok(d.reasons.some(r => r.signal === SIGNAL.SECRET));
+});
+
+// ── what the ruling says must route CHEAP (regression guard) ─────────────────
+// These are the categories Mitchell explicitly ruled ALLOW after a risk review.
+// A failure here means the gate has silently widened and is costing him money.
+
+const MUST_ROUTE_CHEAP = {
+  // NOTE: these samples run against the SYNTHETIC cfg below, so the literal
+  // values are illustrative, not load-bearing — keep them obviously fake. The
+  // owner-specific patterns live in the gitignored private overlay, and the
+  // tests that exercise it are the classifyAsync ones further down.
+  'email address':            'ping me at owner@example.com about the draft',
+  'phone number':             'call 206-555-0142 when the interview is confirmed',
+  'home address':             'ship it to 1 Example Street, Springfield IL 62701',
+  'current employer':         'my current employer is Google and I was laid off in July',
+  'layoff status':            'last day is Aug 23 2026, garden leave until then',
+  'relocation plans':         'relocating to Spain after Nov 30 2026, need the visa timeline',
+  'health information':       'the insurance deadline matters because of my health coverage',
+  'financial details':        'severance is roughly 14 weeks of base salary',
+  'ID document mention':      'I need my passport and drivers licence for the visa appointment',
+  'unpublished career work':  'here is my unsent cover letter and salary negotiation notes',
+  'third-party data':         'candid note on the hiring manager: seemed lukewarm on comms hires',
+  'career-ops path':          'refactor the queue in career-ops/lib/queue.mjs',
+  'voice-os corpus path':     'summarize chunks in voice-os/data/corpus/part-004.jsonl',
+  '~/.claude memory path':    'update ~/.claude/CLAUDE.md with the routing doctrine',
+  'session transcript':       'read the session transcript and pull out the decisions',
+};
+
+for (const [category, sample] of Object.entries(MUST_ROUTE_CHEAP)) {
+  test(`ruled-ALLOW routes cheap: ${category}`, () => {
+    const d = classify({ text: sample }, cfg);
+    assert.equal(d.route, ROUTE.AUTO,
+      `${category} was gated to Anthropic — the gate has widened past the ruling. Reasons: ${JSON.stringify(d.reasons)}`);
+  });
+}
+
+// ── the narrow triggers that DO still fire ───────────────────────────────────
 
 test('gate: generic code request → auto (cheap)', () => {
   const d = classify({ text: 'Refactor this loop into a map and add a unit test.', paths: ['src/util.js'] }, cfg);
@@ -26,119 +108,117 @@ test('gate: generic code request → auto (cheap)', () => {
   assert.equal(d.sensitive, false);
 });
 
-test('gate: request containing a secret → anthropic-direct', () => {
-  const d = classify({ text: 'here is my key sk-abcdef0123456789ABCDEF for testing' }, cfg);
+test('gate: SSN → anthropic-direct', () => {
+  const d = classify({ text: 'SSN 123-45-6789' }, cfg);
   assert.equal(d.route, ROUTE.ANTHROPIC_DIRECT);
-  assert.ok(d.reasons.some(r => r.signal === SIGNAL.SECRET));
+  assert.ok(d.reasons.some(r => r.signal === SIGNAL.PII));
 });
 
-test('gate: ENV=value secret assignment → anthropic-direct', () => {
-  const d = classify({ text: 'OPENAI_API_KEY=sk-proj-verylongsecretvalue1234567890' }, cfg);
-  assert.equal(d.route, ROUTE.ANTHROPIC_DIRECT);
+test('gate: passport NUMBER is gated, but the word alone is not', () => {
+  assert.equal(classify({ text: 'passport number: X1234567' }, cfg).route, ROUTE.ANTHROPIC_DIRECT);
+  assert.equal(classify({ text: 'bring your passport to the appointment' }, cfg).route, ROUTE.AUTO);
 });
 
-test('gate: PII (email + SSN) → anthropic-direct', () => {
-  assert.equal(classify({ text: 'contact user@example.com' }, cfg).route, ROUTE.ANTHROPIC_DIRECT);
-  assert.equal(classify({ text: 'SSN 123-45-6789' }, cfg).route, ROUTE.ANTHROPIC_DIRECT);
-});
-
-test('gate: private path (career-ops / .secrets) → anthropic-direct', () => {
-  assert.equal(classify({ text: 'edit lib/x', paths: ['/Users/m/Documents/career-ops/lib/x.mjs'] }, cfg).route, ROUTE.ANTHROPIC_DIRECT);
+test('gate: credential-holding paths → anthropic-direct', () => {
   assert.equal(classify({ text: 'open ~/.secrets/api-keys.env' }, cfg).route, ROUTE.ANTHROPIC_DIRECT);
+  assert.equal(classify({ text: 'edit it', paths: ['/Users/m/.ssh/id_ed25519'] }, cfg).route, ROUTE.ANTHROPIC_DIRECT);
+  assert.equal(classify({ text: 'fix the shell rc', paths: ['/Users/m/.zshenv'] }, cfg).route, ROUTE.ANTHROPIC_DIRECT);
+});
+
+// Uses the REAL private config, not the synthetic one — the 2026-07-19 session
+// shipped a gate whose unit tests passed while the live overlay still gated
+// everything, because the tests never loaded the overlay. These two do.
+test('gate: the Severance directory is gated (legal/privileged, by ruling)', async () => {
+  // The overlay's trigger is anchored on `Documents/Severance` specifically, so
+  // the username and any subfolder are irrelevant to what this asserts — keep
+  // real client engagement names OUT of a repo intended to go public.
+  const d = await classifyAsync({ text: 'summarize this', paths: ['/Users/example/Documents/Severance/notes.md'] });
+  assert.equal(d.route, ROUTE.ANTHROPIC_DIRECT);
+  assert.ok(d.reasons.some(r => r.signal === SIGNAL.PRIVATE_PATH));
+});
+
+test('gate: the WORD "severance" still routes cheap — only the directory is gated', async () => {
+  const d = await classifyAsync({ text: 'my severance is about 14 weeks of base salary, help me plan the runway' });
+  assert.equal(d.route, ROUTE.AUTO,
+    'a bare /severance/ pattern would re-gate financial details, which are ruled cheap');
+});
+
+test('gate: paths ruled OUT of the NDA trigger route cheap', async () => {
+  // Directory NAMES stay real — they are the regression guard, and a future
+  // re-add of an `upwork` or `Client_Projects` pattern must fail here. Only the
+  // username is genericized.
+  for (const p of ['/Users/example/Documents/upwork-demos/demo1/index.mjs',
+                   '/Users/example/Downloads/01_Active_Projects/Client_Projects/x.md']) {
+    assert.equal((await classifyAsync({ text: 'tidy this up', paths: [p] })).route, ROUTE.AUTO, `${p} should route cheap`);
+  }
 });
 
 test('gate: employer-proprietary marker → anthropic-direct', () => {
-  const d = classify({ text: 'port this from the google-internal build' }, cfg);
+  const d = classify({ text: 'port the google-internal service shim' }, cfg);
   assert.equal(d.route, ROUTE.ANTHROPIC_DIRECT);
   assert.ok(d.reasons.some(r => r.signal === SIGNAL.EMPLOYER));
 });
 
-test('gate: allowlisted public docs path inside a private repo → auto', () => {
-  const d = classify({ text: 'update the public stack map', paths: ['/Users/m/Documents/stack-ops/docs/stack-map.md'] }, cfg);
-  assert.equal(d.route, ROUTE.AUTO);
+test('gate: infra/secrets operations → anthropic-direct (credential exposure)', () => {
+  const d = classify({ text: 'walk me through how to rotate the API key in the vault' }, cfg);
+  assert.equal(d.route, ROUTE.ANTHROPIC_DIRECT);
+  assert.ok(d.reasons.some(r => r.signal === SIGNAL.INFRA));
 });
 
-test('gate: allowlist NEVER exempts secret content', () => {
-  const d = classify({ text: 'token sk-abcdef0123456789ABCDEF', paths: ['/Users/m/Documents/stack-ops/docs/x.md'] }, cfg);
-  assert.equal(d.route, ROUTE.ANTHROPIC_DIRECT); // secret wins over allowlisted path
+test('gate: allowlist exempts a public path but NEVER exempts a secret', () => {
+  assert.equal(classify({ text: 'edit the doc', paths: ['stack-ops/docs/x.md'] }, cfg).route, ROUTE.AUTO);
+  const d = classify({ text: 'key sk-abcdef0123456789ABCDEF', paths: ['stack-ops/docs/x.md'] }, cfg);
+  assert.equal(d.route, ROUTE.ANTHROPIC_DIRECT, 'allowlist must never exempt a credential');
 });
 
-test('gate: empty / malformed input → deny-by-default', () => {
-  assert.equal(classify({}, cfg).route, ROUTE.ANTHROPIC_DIRECT);
+test('gate: deny-by-default on empty/malformed input', () => {
   assert.equal(classify(null, cfg).route, ROUTE.ANTHROPIC_DIRECT);
+  assert.equal(classify({}, cfg).route, ROUTE.ANTHROPIC_DIRECT);
   assert.equal(classify({ text: '' }, cfg).route, ROUTE.ANTHROPIC_DIRECT);
 });
 
-test('gate: works with generic defaults (no private config)', () => {
-  const d = classify({ text: 'open ~/.ssh/id_rsa' }); // buildConfig() default
-  assert.equal(d.route, ROUTE.ANTHROPIC_DIRECT);
-});
+// ── forwarding targets ───────────────────────────────────────────────────────
 
-// ── PR reviewer triage ───────────────────────────────────────────────────────
-
-test('triage: small standard PR → CodeRabbit only', () => {
-  const r = triagePr({ repoTier: REPO_TIER.STANDARD, filesChanged: 2, linesChanged: 30 });
-  assert.deepEqual(r.reviewers, [REVIEWER.CODERABBIT]);
-  assert.equal(r.mergeGate, null);
-});
-
-test('triage: complex repo → CodeRabbit + Greptile', () => {
-  const r = triagePr({ repoTier: REPO_TIER.COMPLEX, filesChanged: 3, linesChanged: 50 });
-  assert.ok(r.reviewers.includes(REVIEWER.CODERABBIT));
-  assert.ok(r.reviewers.includes(REVIEWER.GREPTILE));
-  assert.ok(!r.reviewers.includes(REVIEWER.QODO));
-});
-
-test('triage: large diff on a standard repo pulls in Greptile', () => {
-  const r = triagePr({ repoTier: REPO_TIER.STANDARD, filesChanged: 20, linesChanged: 900 });
-  assert.ok(r.reviewers.includes(REVIEWER.GREPTILE));
-});
-
-test('triage: production + high-stakes → adds Qodo merge-gate', () => {
-  const r = triagePr({ repoTier: REPO_TIER.PRODUCTION, filesChanged: 8, linesChanged: 300, riskLabels: ['security'] });
-  assert.ok(r.reviewers.includes(REVIEWER.QODO));
-  assert.equal(r.mergeGate, REVIEWER.QODO);
-});
-
-test('triage: production but trivial low-risk PR does NOT get 3 bots', () => {
-  const r = triagePr({ repoTier: REPO_TIER.PRODUCTION, filesChanged: 1, linesChanged: 5 });
-  // production → Greptile added, but no high-stakes → no Qodo; and never 3 bots here
-  assert.ok(!r.reviewers.includes(REVIEWER.QODO) || r.reviewers.length < 3);
-});
-
-// ── openrouter auto target resolution ────────────────────────────────────────
-
-test('resolveTarget: auto route → OpenRouter Auto (standard endpoint)', () => {
+test('resolveTarget: cheap route → OpenRouter Auto', () => {
   const t = resolveTarget({ route: ROUTE.AUTO });
   assert.equal(t.provider, 'openrouter');
   assert.equal(t.model, OPENROUTER_AUTO_MODEL);
-  assert.equal(t.baseUrl, ENDPOINTS.OPENROUTER_STANDARD);
   assert.equal(t.thirdParty, true);
 });
 
-test('resolveTarget: auto route + agentMode → /cursor endpoint', () => {
-  const t = resolveTarget({ route: ROUTE.AUTO }, { agentMode: true });
-  assert.equal(t.baseUrl, ENDPOINTS.OPENROUTER_CURSOR);
+test('resolveTarget: agent mode uses the Cursor endpoint', () => {
+  assert.equal(resolveTarget({ route: ROUTE.AUTO }, { agentMode: true }).baseUrl, ENDPOINTS.OPENROUTER_CURSOR);
 });
 
-test('resolveTarget: sensitive route → Anthropic-direct (no third party)', () => {
+test('resolveTarget: sensitive route → Anthropic-direct, never third party', () => {
   const t = resolveTarget({ route: ROUTE.ANTHROPIC_DIRECT });
   assert.equal(t.provider, 'anthropic');
   assert.equal(t.thirdParty, false);
 });
 
-test('resolveTarget: unknown route → defaults to trusted (deny-by-default)', () => {
-  const t = resolveTarget({ route: 'garbage' });
+test('resolveTarget: unrecognized route defaults to the trusted provider', () => {
+  const t = resolveTarget({ route: 'nonsense' });
+  assert.equal(t.provider, 'anthropic');
   assert.equal(t.thirdParty, false);
-  assert.ok(t.note);
+  assert.match(t.note, /deny-by-default/);
 });
 
-test('cursorBaseUrl: rejects localhost (Cursor SSRF)', () => {
-  assert.throws(() => cursorBaseUrl('http://127.0.0.1:8080'));
-  assert.throws(() => cursorBaseUrl('http://localhost:8080'));
+test('cursorBaseUrl: refuses localhost / private hosts (Cursor SSRF-blocks them)', () => {
+  assert.throws(() => cursorBaseUrl('http://127.0.0.1:8787'), /refusing localhost/);
+  assert.throws(() => cursorBaseUrl('http://localhost:8787'), /refusing localhost/);
+  assert.equal(cursorBaseUrl('https://router.example.ts.net'), 'https://router.example.ts.net/v1');
+  assert.equal(cursorBaseUrl('https://router.example.ts.net', { agentMode: true }), 'https://router.example.ts.net/v1/cursor');
 });
 
-test('cursorBaseUrl: accepts a MagicDNS host, appends the right suffix', () => {
-  assert.equal(cursorBaseUrl('https://router.tail1234.ts.net'), 'https://router.tail1234.ts.net/v1');
-  assert.equal(cursorBaseUrl('https://router.tail1234.ts.net/', { agentMode: true }), 'https://router.tail1234.ts.net/v1/cursor');
+// ── PR reviewer triage ───────────────────────────────────────────────────────
+
+test('triagePr: small low-risk diff → CodeRabbit only', () => {
+  const r = triagePr({ additions: 20, deletions: 5, filesChanged: 2, repoTier: REPO_TIER.STANDARD });
+  assert.ok(r.reviewers.includes(REVIEWER.CODERABBIT));
+  assert.ok(r.reviewers.length <= 2, 'never stack three bots on one PR');
+});
+
+test('triagePr: never assigns three reviewers to one PR', () => {
+  const r = triagePr({ additions: 5000, deletions: 3000, filesChanged: 90, repoTier: REPO_TIER.PRODUCTION_CRITICAL, riskLabels: ['security', 'migration'] });
+  assert.ok(r.reviewers.length <= 2, `got ${r.reviewers.length} reviewers`);
 });

@@ -19,6 +19,34 @@ small low-risk PR; never let "AI found no issues" be the only required check (CI
 a human still gate). career-ops already runs CodeRabbit + Greptile + Qodo; the
 triage decides which fire per PR.
 
+### Provisioning status (2026-07-19)
+
+- **CodeRabbit** — live, always-on. The only **repo-file** config (`.coderabbit.yaml`).
+- **Greptile** — signed up (complex-repo tier). Activated per-repo via its **GitHub App + dashboard**; no repo file.
+- **Qodo** — unblocked (production-critical merge-gate). Activated via its **GitHub App**, and enforced as a **required status check in branch protection**; no repo file (career-ops runs it dashboard-configured).
+
+So only CodeRabbit is scaffolded in-repo. Turning on Greptile / Qodo for a repo is a GitHub-side step (install the App + add the required check) — Mitchell's action.
+
+### Per-repo tier assignment (2026-07-19)
+
+Criticality read from the environment (live launchd pipelines, public URLs, repo purpose), not asked.
+
+| Repo | Signal | Tier | Bots |
+|---|---|---|---|
+| career-ops | dozens of live launchd pipelines + dashboard | Production-critical | CodeRabbit + Qodo (already wired; triage adds Greptile per-PR) |
+| storytellermitch-site | live public site (storytellermitch.com) | Production-critical | CodeRabbit + Qodo merge-gate |
+| voice-os | golden-file determinism, LangGraph pipeline | Complex | CodeRabbit + Greptile |
+| stack-ops | routing substrate, multi-module + tests | Complex | CodeRabbit + Greptile |
+| broll-pipeline | media pipeline | Complex | CodeRabbit + Greptile |
+| council-os | KB the agents read | Complex | CodeRabbit + Greptile |
+| relocation-os | personal planning | Standard | CodeRabbit only |
+| content-ops | content | Standard | CodeRabbit only |
+| mission-control | small utility | Standard | CodeRabbit only |
+| monolith | dormant feature branch | Standard | CodeRabbit only (add when reactivated) |
+| mesa | deferred (not adopted) | — | skip until the mem0 head-to-head |
+
+**Never three bots on one PR:** where a repo qualifies for two tiers (career-ops is both prod-critical and complex), `src/router/pr-reviewer-triage.mjs` picks the subset per PR by diff size / risk labels. `.coderabbit.yaml` was scaffolded into every repo that lacked one on 2026-07-19 (adapted from career-ops's churn-tuned baseline: `chill` profile, pinned correctness/security/data-integrity, process-boilerplate suppressed, `code_guidelines` off, `learnings` local). career-ops + relocation-os kept their existing configs; monolith (dormant) was skipped. The remaining work is the GitHub-side Greptile/Qodo activation per the tier table above.
+
 ## Content QA (decision G)
 
 **Keep:** Pangram (AI-detection — the one detector worth paying for; its low-FPR

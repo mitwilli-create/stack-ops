@@ -38,7 +38,7 @@ async function getImpl() {
       const m = new MemoryClient({ apiKey: process.env.MEM0_API_KEY });
       _impl = {
         async add(text, meta) { return m.add([{ role: 'user', content: text }], { user_id: USER_ID, metadata: meta }); },
-        async search(q, k = 5) { const r = await m.search(q, { user_id: USER_ID, limit: k }); return r?.results || r || []; },
+        async search(q, k = 5) { const r = await m.search(q, { filters: { user_id: USER_ID }, limit: k }); return r?.results || r || []; },
         kind: 'platform',
       };
     }
