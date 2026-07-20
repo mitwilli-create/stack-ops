@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * cheap.mjs — dispatch BULK TOIL to the cheap tier, with the privacy gate in front.
+ * cheap.mjs, dispatch BULK TOIL to the cheap tier, with the privacy gate in front.
  *
  * WHY THIS IS A CLI AND NOT A GATEWAY (ruled 2026-07-19, see
  * stack-ops/private/decisions/D6-claude-code-auth-and-routing.md):
@@ -16,7 +16,7 @@
  * Claude Code's authentication, so there is no billing inversion and no ToS
  * exposure from subscription OAuth reaching a third party.
  *
- * SCOPING CONDITION — this earns its keep on BULK work only. Summarizing forty
+ * SCOPING CONDITION, this earns its keep on BULK work only. Summarizing forty
  * files, triaging a large log, mechanical edits across a tree: the cheap model does
  * heavy generation and the saving is real. On a small one-off task the
  * orchestration overhead exceeds the saving, and you should just do it inline.
@@ -39,7 +39,7 @@ const DECISION_LOG = join(homedir(), '.claude', 'logs', 'cheap-decisions.jsonl')
 
 // Archetype → model. Mirrors career-ops TASK_ROUTING_LADDERS' cheap rungs; kept as
 // a local copy on purpose so this CLI has no cross-repo import. Prices per Mtok
-// in/out, verified against the live OpenRouter catalog 2026-07-19 — re-check
+// in/out, verified against the live OpenRouter catalog 2026-07-19, re-check
 // before trusting them, they move.
 const LADDERS = {
   bulk_summarize:        ['openai/gpt-oss-120b', 'deepseek/deepseek-v4-flash'],       // $0.04/$0.17
@@ -87,7 +87,7 @@ const args = parseArgs(process.argv.slice(2));
 const stdin = await readStdin();
 
 // Build the full body ONCE and scan all of it. The scanner is full-content by
-// contract — file bodies included, never just the instruction.
+// contract, file bodies included, never just the instruction.
 const fileBlobs = args.files.map(f => {
   try { return `\n\n===== ${f} =====\n` + readFileSync(f, 'utf8'); }
   catch (e) { return `\n\n===== ${f} (unreadable: ${e.code}) =====\n`; }
@@ -95,7 +95,7 @@ const fileBlobs = args.files.map(f => {
 const body = [args.prompt, stdin, ...fileBlobs].filter(Boolean).join('\n');
 
 if (!body.trim()) {
-  console.error('cheap: nothing to do — pass a prompt, pipe stdin, or use --files');
+  console.error('cheap: nothing to do, pass a prompt, pipe stdin, or use --files');
   process.exit(2);
 }
 
@@ -107,7 +107,7 @@ const decision = await classifyAsync({ text: body, paths: args.files });
 // the work. Silently calling a frontier model would hide the cost, not save it.
 if (decision.route !== ROUTE.AUTO) {
   const why = decision.reasons.map(r => `${r.signal}: ${r.detail}`).join(' · ');
-  console.error(`cheap: REFUSED — the privacy gate flagged this request.\n  ${why}\n` +
+  console.error(`cheap: REFUSED, the privacy gate flagged this request.\n  ${why}\n` +
     `  Do this one in Claude Code instead (it is already on the trusted path).`);
   logDecision({ ts: new Date().toISOString(), outcome: 'refused', task: args.task || null, reasons: decision.reasons, chars: body.length });
   process.exit(3);
@@ -117,7 +117,7 @@ const ladder = LADDERS[args.task] || [];
 const model = args.model || ladder[0] || DEFAULT_MODEL;
 
 if (body.length < BULK_THRESHOLD_CHARS && !args.dryRun) {
-  console.error(`cheap: note — input is ${body.length} chars, under the ${BULK_THRESHOLD_CHARS} bulk threshold. ` +
+  console.error(`cheap: note, input is ${body.length} chars, under the ${BULK_THRESHOLD_CHARS} bulk threshold. ` +
     `This tier pays off on bulk work; a task this size is usually cheaper done inline.`);
 }
 
@@ -154,7 +154,7 @@ try {
     }),
   });
 } catch (e) {
-  console.error(`cheap: request failed — ${e.message}`);
+  console.error(`cheap: request failed, ${e.message}`);
   process.exit(5);
 }
 

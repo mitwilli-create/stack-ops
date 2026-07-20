@@ -21,11 +21,11 @@ triage decides which fire per PR.
 
 ### Provisioning status (2026-07-19)
 
-- **CodeRabbit** — live, always-on. The only **repo-file** config (`.coderabbit.yaml`).
-- **Greptile** — signed up (complex-repo tier). Activated per-repo via its **GitHub App + dashboard**; no repo file.
-- **Qodo** — unblocked (production-critical merge-gate). Activated via its **GitHub App**, and enforced as a **required status check in branch protection**; no repo file (career-ops runs it dashboard-configured).
+- **CodeRabbit**: live, always-on. The only **repo-file** config (`.coderabbit.yaml`).
+- **Greptile**: signed up (complex-repo tier). Activated per-repo via its **GitHub App + dashboard**; no repo file.
+- **Qodo**: unblocked (production-critical merge-gate). Activated via its **GitHub App**, and enforced as a **required status check in branch protection**; no repo file (career-ops runs it dashboard-configured).
 
-So only CodeRabbit is scaffolded in-repo. Turning on Greptile / Qodo for a repo is a GitHub-side step (install the App + add the required check) — Mitchell's action.
+So only CodeRabbit is scaffolded in-repo. Turning on Greptile / Qodo for a repo is a GitHub-side step (install the App + add the required check). That is Mitchell's action.
 
 ### Per-repo tier assignment (2026-07-19)
 
@@ -43,13 +43,13 @@ Criticality read from the environment (live launchd pipelines, public URLs, repo
 | content-ops | content | Standard | CodeRabbit only |
 | mission-control | small utility | Standard | CodeRabbit only |
 | monolith | dormant feature branch | Standard | CodeRabbit only (add when reactivated) |
-| mesa | deferred (not adopted) | — | skip until the mem0 head-to-head |
+| mesa | deferred (not adopted) | n/a | skip until the mem0 head-to-head |
 
 **Never three bots on one PR:** where a repo qualifies for two tiers (career-ops is both prod-critical and complex), `src/router/pr-reviewer-triage.mjs` picks the subset per PR by diff size / risk labels. `.coderabbit.yaml` was scaffolded into every repo that lacked one on 2026-07-19 (adapted from career-ops's churn-tuned baseline: `chill` profile, pinned correctness/security/data-integrity, process-boilerplate suppressed, `code_guidelines` off, `learnings` local). career-ops + relocation-os kept their existing configs; monolith (dormant) was skipped. The remaining work is the GitHub-side Greptile/Qodo activation per the tier table above.
 
 ## Content QA (decision G)
 
-**Keep:** Pangram (AI-detection — the one detector worth paying for; its low-FPR
+**Keep:** Pangram (AI-detection, the one detector worth paying for; its low-FPR
 result is independently verified) + Originality (plagiarism, wired as a
 **REGULAR-firing** gate, not ad hoc). **Drop:** GPTZero + Sapling (redundant with
 Pangram; formally retire the keys in the secrets-file pass).
@@ -63,9 +63,11 @@ output alone.**
 `vale` validates prose against Mitchell's actual voice, not generic style. Config at
 `.vale.ini` + `styles/VoiceOS/`:
 
-- **EmDash** (error) — em/en dashes are banned in outward materials; the linter
+- **EmDash** (error): em/en dashes are banned in outward materials; the linter
   fails on sight so the rule is enforced structurally, not by memory.
-- **AntiSlop** (warning) — flags hype/slop vocabulary and the banned word "kill";
+<!-- vale VoiceOS.AntiSlop = NO -->
+- **AntiSlop** (warning): flags hype/slop vocabulary and the banned word "kill";
+<!-- vale VoiceOS.AntiSlop = YES -->
   the anti-slop *process* (draft → cut 60-80% → rewrite in voice with concrete
   facts → grep out hype) is what the warning nudges toward.
 
@@ -76,5 +78,15 @@ fast always-on pre-filter that catches the two hardest rules cheaply.
 
 ```bash
 brew install vale
-vale docs/            # lint the public docs
+vale --glob='!node_modules/**' .     # lint every prose file, not just docs/
 ```
+
+Two configuration facts that are load-bearing, both verified on 2026-07-20:
+
+- **`EmDash.yml` sets `scope: raw`.** Without it Vale's Markdown parser drops
+  matches inside soft-wrapped blocks containing inline code spans. Measured on
+  `docs/mcp-layer.md`: 3 of 11 caught by default, 11 of 11 with `scope: raw`.
+  A character ban needs a byte-level check, so verify it with
+  `grep -rn '[^\x00-\x7F]'`-style greps as well, never Vale alone.
+- **`vale docs/` is not the gate.** It leaves `README.md`, `src/router/README.md`
+  and `skills/` unchecked. README.md carried 4 errors while the repo looked clean.

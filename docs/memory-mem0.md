@@ -1,7 +1,7 @@
 # Memory layer: mem0
 
 The persistent-memory pillar of the three-layer hygiene frame (decision E). mem0 is
-the **standardized baseline, set in stone**, wired via its SDK/platform — **not** the
+the **standardized baseline, set in stone**, wired via its SDK/platform, **not** the
 archived `mem0ai/mem0-mcp` server.
 
 ## Wiring
@@ -11,7 +11,7 @@ archived `mem0ai/mem0-mcp` server.
 
 | Mode | Env | Needs | Notes |
 |---|---|---|---|
-| Platform (default) | `MEM0_MODE=platform` | `MEM0_API_KEY` | hosted; `npm i mem0ai`. **Key is Mitchell's to add** — a value cannot be pasted here. |
+| Platform (default) | `MEM0_MODE=platform` | `MEM0_API_KEY` | hosted; `npm i mem0ai`. **Key is Mitchell's to add**; a value cannot be pasted here. |
 | Self-host | `MEM0_MODE=oss` | a local vector store | `mem0ai/oss`; fully local, best for the content-level privacy gate's sensitive traffic. |
 
 If the key/SDK is absent it degrades to a **no-op** (stores nothing, returns `[]`)

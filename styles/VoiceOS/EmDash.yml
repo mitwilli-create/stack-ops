@@ -1,7 +1,16 @@
 extends: existence
-message: "Em dash BANNED in outward materials (Mitchell voice rule) — rewrite with a period, comma, colon, or parentheses."
+message: "Em dash BANNED in outward materials (Mitchell voice rule), rewrite with a period, comma, colon, or parentheses."
 level: error
 nonword: true
+# scope: raw bypasses Vale's markdown parser. Without it, an inline code span
+# inside a soft-wrapped block silently drops matches (verified 2026-07-20:
+# 3 of 11 caught on docs/mcp-layer.md; 11 of 11 with raw). A character ban
+# needs a byte-level check, not a markup-aware one.
+scope: raw
+# DO NOT run any em-dash scrubber over this file. The tokens below ARE the
+# banned characters; a 2026-07-20 sweep rewrote the first one into ', ' and
+# silently repointed this rule at commas. Nothing failed, because no test
+# covers the rule files.
 tokens:
   - '—'
   - '–'

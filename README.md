@@ -1,9 +1,9 @@
 # stack-ops
 
 An automatic, research-validated **model-triage system** for a multi-vendor AI stack: route each task to
-the model or tool that independent, practitioner-sourced research shows is genuinely best for it — cheap
+the model or tool that independent, practitioner-sourced research shows is genuinely best for it. Cheap
 open-weight models for menial/toil work, frontier labs for deep and surgical work, media models for their
-own modalities — so output quality per dollar is maximized instead of streaming everything through one
+own modalities, so output quality per dollar is maximized instead of streaming everything through one
 vendor.
 
 ## Why
@@ -15,11 +15,11 @@ wins at, encode that into a triage layer, and operate from an editor where the r
 
 ## What's here (as it lands)
 
-- **Capability maps** — where open-weight/Chinese models succeed, break, and are best used; and where each
+- **Capability maps**: where open-weight/Chinese models succeed, break, and are best used; and where each
   frontier lab is optimally suited relative to the rest of the market. Sourced from practitioner discussion
   (forums, issue threads, repos), favoring open-source and highly-endorsed tools over reinvention.
-- **Triage methodology** — how tasks are classified and routed.
-- **Workspace setup** — the editor/workspace configuration that operationalizes the triage.
+- **Triage methodology**: how tasks are classified and routed.
+- **Workspace setup**: the editor/workspace configuration that operationalizes the triage.
 
 ## Safety
 

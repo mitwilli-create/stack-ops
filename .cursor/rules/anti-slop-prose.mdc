@@ -1,0 +1,50 @@
+---
+description: Mitchell's anti-slop writing standard for all prose and outward-facing text. Apply when writing or editing any Markdown, docs, README, commit body, PR description, or user-visible string.
+globs: ["**/*.md", "**/*.mdc", "**/*.txt"]
+alwaysApply: false
+---
+
+# Anti-slop writing standard
+
+Mechanical enforcement already exists: `vale docs/` runs the `VoiceOS` style in `styles/VoiceOS/`
+(`EmDash.yml` at error level, `AntiSlop.yml` at warning). Run it before claiming prose is done.
+These rules cover the judgment Vale cannot check.
+
+## Hard bans
+
+- **No em dashes or en dashes.** Not in any prose, ever. Rewrite with a period, comma, colon, or
+  parentheses. This is a standing rule, not a preference to confirm. Scrub on sight.
+- **No AI self-attribution.** Never write "as an AI", "I generated", "AI-assisted", or any variant.
+  The text stands on its own.
+- **No process narration.** Do not describe the writing you are about to do. Delete openers like
+  "Let's dive in", "In this section we will explore", "Here's a breakdown of".
+- **No filler agreement.** Cut "Great question", "Absolutely", "You're right", "Makes sense" unless
+  the agreement carries actual substance.
+<!-- vale VoiceOS.AntiSlop = NO -->
+- **No hype vocabulary.** See `styles/VoiceOS/AntiSlop.yml` for the enforced token list (leverage,
+  seamless, robust, cutting-edge, game-changing, synergy, unlock, delve, tapestry, testament to,
+  best-in-class, revolutionize, supercharge, "in today's X landscape"). Replace each with a concrete
+  fact or a named trade-off.
+<!-- vale VoiceOS.AntiSlop = YES -->
+
+## The pipeline
+
+1. Draft for facts and structure. Do not attempt voice in the draft.
+2. **Cut 60 to 80 percent.** Most first drafts are padding. Assume yours is.
+3. Rewrite in Mitchell's voice: concrete specifics, named trade-offs, plain sentences.
+4. Grep for the banned tokens above, then run Vale.
+
+## Structural rules
+
+- **Answer first.** The first sentence states the conclusion. Context comes after, never before.
+- **One concrete next action** at the end of anything actionable. Never a menu of options.
+- **Name the trade-off.** A claim without its cost reads as marketing. Say what the choice gives up.
+- **Cite the source on non-obvious claims.** `file:line` for code, a URL for external facts.
+- **Label confidence** when a claim is not directly verified: verified, inferred, recalled, or
+  guessing. Do not present an inference as an observation.
+
+## Hedging
+
+Delete "arguably", "it could be said", "somewhat", "fairly", "quite", "very", "really" and their
+relatives. If a claim needs a hedge, either state the actual uncertainty ("untested against version
+3.12") or cut the claim.

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * cli.mjs — inspect the router substrate's decision for a request.
+ * cli.mjs, inspect the router substrate's decision for a request.
  *
  *   echo "refactor this loop" | node src/router/cli.mjs
  *   node src/router/cli.mjs --text "open ~/.secrets/api-keys.env"

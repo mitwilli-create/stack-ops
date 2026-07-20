@@ -41,7 +41,7 @@ imply.
 A tempting design lets the IDE read a prompt, classify it, and swap models per
 request. It cannot, structurally: the IDE supports pointing at exactly one
 OpenAI-compatible endpoint. The working pattern is an **external router behind that
-one endpoint** — the IDE always talks to the same URL, and a thin service in front of
+one endpoint**: the IDE always talks to the same URL, and a thin service in front of
 the real providers does the classification and dispatch. Recommended substrate: an
 existing meta-router (an `auto` routing target) rather than a hand-rolled classifier,
 reserving custom classification for the day the off-the-shelf router demonstrably
@@ -55,21 +55,21 @@ because four of five research lanes assumed raw localhost would work, and it doe
 
 ## Layer map
 
-**Frontier models** — one subscription/API per major lab, each assigned the task
+**Frontier models**: one subscription/API per major lab, each assigned the task
 classes above, plus a citation-grounded deep-research API as a distinct research
 modality (not a general-purpose model).
 
-**Open-weight toil tier** — a gateway aggregating several near-frontier open-weight
+**Open-weight toil tier**: a gateway aggregating several near-frontier open-weight
 models, mostly permissively licensed, each independently verified to exist and carry
 real adoption. This tier is the default target for anything a privacy classifier
 clears as non-sensitive, and an independent adversarial cross-check in research work
 (a different training lineage catches consensus errors a same-lineage panel shares).
 
-**Media** — separate, purpose-built providers for text-to-speech, transcription,
+**Media**: separate, purpose-built providers for text-to-speech, transcription,
 audio editing, audio mastering, and image/video generation, rather than forcing a
 general chat model to do media work it is mediocre at.
 
-**Research and content-QA** — four complementary research modalities: live cited web
+**Research and content-QA**: four complementary research modalities: live cited web
 search for fresh facts; a grounded-notebook tool for static-corpus synthesis and
 audio overviews (explicitly not the system of record, since it lacks version control
 and can silently truncate); retrieval over a private known corpus; and a multi-model
@@ -81,7 +81,7 @@ detectors. Detection is triage plus a provenance trail plus a periodic human
 benchmark, never a verdict on its own. A voice linter enforces the two hardest
 house-style rules cheaply and always-on.
 
-**Code-QA** — a tiered review stack: an always-on low-noise diff reviewer on every
+**Code-QA**: a tiered review stack: an always-on low-noise diff reviewer on every
 repo; a full-codebase semantic reviewer added only on complex or high-blast-radius
 repos; a merge-gate reviewer added only on production-critical repos, and only for
 high-stakes changes. Hard anti-pattern, encoded in code: never run all three on a
@@ -89,26 +89,26 @@ trivial change, and never let "the bot found nothing" be the only required check
 companion classifier decides which reviewers a change needs from diff size, files
 touched, and whether it touches an auth, payment, security, or migration path.
 
-**Infrastructure and MCP** — a tight foundational set of protocol-connected tools
+**Infrastructure and MCP**: a tight foundational set of protocol-connected tools
 (source control, browser automation, live library docs, semantic code search,
 filesystem, sequential reasoning, web fetch) plus a domain set activated per project.
 Explicit anti-pattern: too many active tool servers measurably degrades tool
 selection, so the live set stays tight. Purpose-built internal tools get wrapped as
 narrow protocol servers of their own, so any agent calls them like a third-party tool.
 
-**Memory** — a three-layer hygiene frame: persistent memory outside the prompt,
+**Memory**: a three-layer hygiene frame: persistent memory outside the prompt,
 aggressive compaction and pruning, and token/caching discipline that is measured
 rather than assumed. Measurement surfaces the biggest lever: the majority of spend in
 a long-lived coding-agent workflow is caching mechanics on large contexts, not raw
-output, so the highest-leverage move is fewer, longer-lived sessions and compressing
+output, so the biggest saving is fewer, longer-lived sessions and compressing
 noisy tool output before it enters context, not just shorter replies.
 
-**Browser** — a stable Chromium daily driver plus one free AI-native browser, with a
+**Browser**: a stable Chromium daily driver plus one free AI-native browser, with a
 paid alternative deferred. A formerly popular browser was ruled out after its maker
 was absorbed in a large 2025 acquisition and the product moved to maintenance mode: a
 good reminder that a stack map needs a re-verification date, not permanence.
 
-**Hosting and remote access** — personal hardware behind a private mesh VPN is the
+**Hosting and remote access**: personal hardware behind a private mesh VPN is the
 privacy gold standard for a secrets-adjacent stack, reached from any external tool
 through a tunnel or a private DNS hostname rather than a raw local address. A low-cost
 VPS behind the same mesh, zero public ports, is the uptime fallback. Shared hosting

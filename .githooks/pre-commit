@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Blocking prose gate. Ruled 2026-07-20 (low-cog interview, item 4).
+# Committed via core.hooksPath so it travels with the repo instead of living
+# only on one machine. Baseline is clean, so this only fires on NEW
+# violations. Bypass with --no-verify when you mean it.
+exec "$(git rev-parse --show-toplevel)/scripts/lint-prose.sh"

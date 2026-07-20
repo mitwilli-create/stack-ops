@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 /**
- * council-server.mjs — narrow MCP server wrapping the multi-model council engine.
+ * council-server.mjs, narrow MCP server wrapping the multi-model council engine.
  *
  * Exposes the engine's ROUTING POLICY as three read-only tools so any agent
  * (Claude Code, Cursor) can ask "what model/tool should this task go to?" without
  * importing the engine or spending a cent. Running an actual paid council fan-out
- * is deliberately NOT exposed here — it costs money and must pass the approval
+ * is deliberately NOT exposed here, it costs money and must pass the approval
  * gate (that stays behind the engine's run-council.mjs + approval flow).
  *
  * Public code carries NO private path: the engine location comes from
- * COUNCIL_ENGINE_PATH (env) or the gitignored private/mcp-config.mjs — the same
+ * COUNCIL_ENGINE_PATH (env) or the gitignored private/mcp-config.mjs, the same
  * public-code / private-config split the router uses.
  *
  * Tools:
@@ -40,7 +40,7 @@ async function getEngine() {
     enginePromise = (async () => {
       const path = await resolveEnginePath();
       if (!path) {
-        throw new Error('council engine not configured — set COUNCIL_ENGINE_PATH or private/mcp-config.mjs { councilEnginePath }');
+        throw new Error('council engine not configured, set COUNCIL_ENGINE_PATH or private/mcp-config.mjs { councilEnginePath }');
       }
       return import(path);
     })();

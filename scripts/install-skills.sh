@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# install-skills.sh — install the Run-1-ruled skill additions (decision F), the
+# install-skills.sh, install the Run-1-ruled skill additions (decision F), the
 # collision-safe way. Idempotent: safe to re-run.
 #
-# SEQUENCING (important): run the skill-spam PRUNE first (D5 rec C1 — disable the
+# SEQUENCING (important): run the skill-spam PRUNE first (D5 rec C1, disable the
 # irrelevant marketplace categories) BEFORE adding these, or you deepen the exact
 # tool-selection-degrading problem the Run-1 research warned about. Adding 12
 # always-loaded skills to an already-120+ set is net-negative without the prune.
@@ -53,7 +53,7 @@ for s in domain-modeling grill-with-docs to-spec to-tickets implement \
   [ -n "$path" ] && link_skill "$path" "mp-$s"
 done
 
-# obra/superpowers — EXACTLY two (the capped imports). Namespaced sp-.
+# obra/superpowers, EXACTLY two (the capped imports). Namespaced sp-.
 SP="$SRC/superpowers/skills"
 for s in subagent-driven-development test-driven-development; do
   path="$(find "$SP" -maxdepth 3 -type d -name "$s" 2>/dev/null | head -1)"

@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────
-# stack-ops .gitignore — this repo is intended to become PUBLIC.
+# stack-ops .gitignore, this repo is intended to become PUBLIC.
 # The private/ layer + secret patterns below must NEVER be tracked.
 # NOTE: .gitignore is a floor, not the gate. Before ANY push, a
 # secret scan (gitleaks/trufflehog or a key-pattern grep over the
@@ -7,7 +7,7 @@
 # MANDATORY. See private/HANDOVER.md § public-repo publishing gate.
 # ─────────────────────────────────────────────────────────────
 
-# ── Private layer: personal, confidential, pointers — never publish ──
+# ── Private layer: personal, confidential, pointers, never publish ──
 private/
 NOTES.md
 *.private.md

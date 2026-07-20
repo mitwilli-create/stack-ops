@@ -1,6 +1,6 @@
 ---
 name: research-router
-description: Route a research request to the right modality — deep-research product, NotebookLM (Gemini Notebook), KB-RAG over a private corpus, or the multi-LLM council. Use when Mitchell says "research X", "look into X", "what's the current state of X", or any open-ended research ask, to pick the cheapest modality that fits before spending on the council.
+description: Route a research request to the right modality, whether deep-research product, NotebookLM (Gemini Notebook), KB-RAG over a private corpus, or the multi-LLM council. Use when Mitchell says "research X", "look into X", "what's the current state of X", or any open-ended research ask, to pick the cheapest modality that fits before spending on the council.
 ---
 
 # Research router
@@ -28,11 +28,11 @@ audio** surface only. It is NOT the canonical store and NOT the final authoring
 surface (no version control, silent truncation on long inputs).
 
 - Vet sources BEFORE adding them (one notebook per project).
-- **Canonical reports live in an external durable store** — Git / Drive / Obsidian
+- **Canonical reports live in an external durable store**: Git / Drive / Obsidian
   markdown. NotebookLM's storage is a scratchpad.
 - Agents **re-query via a separate RAG index over the EXPORTED files**, or via a
   local MCP bridge (`notebooklm-py` / `notebooklm-mcp-cli`) for still-active
-  notebooks — treat that path as fragile, never load-bearing.
+  notebooks. Treat that path as fragile, never load-bearing.
 - Use it for: citation-anchored synthesis of a vetted set, a review/critique pass,
   and Audio Overviews. Do not use it as the authoring or storage system.
 

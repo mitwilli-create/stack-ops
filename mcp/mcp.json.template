@@ -1,5 +1,5 @@
 {
-  "_comment": "MCP wiring template for stack-ops. Copy to a project's .mcp.json (Claude Code) or .cursor/mcp.json (Cursor) and KEEP THE ACTIVE SET TIGHT per docs/mcp-layer.md (tool-spam degrades tool-selection). Values shown as ${ENV_VAR} are read from the environment — never inline a key. Servers needing OAuth (Google Workspace, Sentry remote, Notion) are authorized once via the client, not via a key here.",
+  "_comment": "MCP wiring template for stack-ops. Copy to a project's .mcp.json (Claude Code) or .cursor/mcp.json (Cursor) and KEEP THE ACTIVE SET TIGHT per docs/mcp-layer.md (tool-spam degrades tool-selection). Values shown as ${ENV_VAR} are read from the environment, never inline a key. Servers needing OAuth (Google Workspace, Sentry remote, Notion) are authorized once via the client, not via a key here.",
 
   "mcpServers": {
     "council": {

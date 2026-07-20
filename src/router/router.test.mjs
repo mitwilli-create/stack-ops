@@ -1,5 +1,5 @@
 /**
- * router.test.mjs — tests for the stack-ops router substrate.
+ * router.test.mjs, tests for the stack-ops router substrate.
  * Run: node --test src/router/router.test.mjs
  *
  * The credential-format tests below are NOT routine coverage. With the privacy
@@ -72,7 +72,7 @@ test('scanner is full-content, not sampled: a key buried in a long body is caugh
 
 const MUST_ROUTE_CHEAP = {
   // NOTE: these samples run against the SYNTHETIC cfg below, so the literal
-  // values are illustrative, not load-bearing — keep them obviously fake. The
+  // values are illustrative, not load-bearing, keep them obviously fake. The
   // owner-specific patterns live in the gitignored private overlay, and the
   // tests that exercise it are the classifyAsync ones further down.
   'email address':            'ping me at owner@example.com about the draft',
@@ -96,7 +96,7 @@ for (const [category, sample] of Object.entries(MUST_ROUTE_CHEAP)) {
   test(`ruled-ALLOW routes cheap: ${category}`, () => {
     const d = classify({ text: sample }, cfg);
     assert.equal(d.route, ROUTE.AUTO,
-      `${category} was gated to Anthropic — the gate has widened past the ruling. Reasons: ${JSON.stringify(d.reasons)}`);
+      `${category} was gated to Anthropic, the gate has widened past the ruling. Reasons: ${JSON.stringify(d.reasons)}`);
   });
 }
 
@@ -125,26 +125,26 @@ test('gate: credential-holding paths → anthropic-direct', () => {
   assert.equal(classify({ text: 'fix the shell rc', paths: ['/Users/m/.zshenv'] }, cfg).route, ROUTE.ANTHROPIC_DIRECT);
 });
 
-// Uses the REAL private config, not the synthetic one — the 2026-07-19 session
+// Uses the REAL private config, not the synthetic one, the 2026-07-19 session
 // shipped a gate whose unit tests passed while the live overlay still gated
 // everything, because the tests never loaded the overlay. These two do.
 test('gate: the Severance directory is gated (legal/privileged, by ruling)', async () => {
   // The overlay's trigger is anchored on `Documents/Severance` specifically, so
-  // the username and any subfolder are irrelevant to what this asserts — keep
+  // the username and any subfolder are irrelevant to what this asserts, keep
   // real client engagement names OUT of a repo intended to go public.
   const d = await classifyAsync({ text: 'summarize this', paths: ['/Users/example/Documents/Severance/notes.md'] });
   assert.equal(d.route, ROUTE.ANTHROPIC_DIRECT);
   assert.ok(d.reasons.some(r => r.signal === SIGNAL.PRIVATE_PATH));
 });
 
-test('gate: the WORD "severance" still routes cheap — only the directory is gated', async () => {
+test('gate: the WORD "severance" still routes cheap, only the directory is gated', async () => {
   const d = await classifyAsync({ text: 'my severance is about 14 weeks of base salary, help me plan the runway' });
   assert.equal(d.route, ROUTE.AUTO,
     'a bare /severance/ pattern would re-gate financial details, which are ruled cheap');
 });
 
 test('gate: paths ruled OUT of the NDA trigger route cheap', async () => {
-  // Directory NAMES stay real — they are the regression guard, and a future
+  // Directory NAMES stay real, they are the regression guard, and a future
   // re-add of an `upwork` or `Client_Projects` pattern must fail here. Only the
   // username is genericized.
   for (const p of ['/Users/example/Documents/upwork-demos/demo1/index.mjs',

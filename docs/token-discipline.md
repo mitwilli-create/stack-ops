@@ -36,7 +36,7 @@ Two real, high-adoption token-reduction tools were evaluated. They attack
 | caveman (JuliusBrussee/caveman) | output | Compresses the *model's replies* into fragment-style prose; code/errors byte-exact | ~65% output tokens |
 
 **Pick: rtk.** Since metering shows spend is dominated by context/input and cache
-mechanics (not output), the higher-leverage tool is the one that shrinks the noisy
+mechanics (not output), the tool worth adopting is the one that shrinks the noisy
 command output bloating context. rtk is a transparent single binary, low
 integration friction, and its 60-90% reduction lands squarely on the biggest cost
 driver. caveman is a genuine complement (output side) and is **deferred**, not
@@ -47,4 +47,4 @@ dropped, per the "pick one" ruling.
 > ccusage before/after) before committing; revisit caveman if output tokens turn
 > out to be a larger share than the current profile suggests.
 
-Reduction numbers are vendor-reported — measure your own before/after with ccusage.
+Reduction numbers are vendor-reported. Measure your own before/after with ccusage.

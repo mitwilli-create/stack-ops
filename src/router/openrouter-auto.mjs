@@ -1,11 +1,11 @@
 /**
- * openrouter-auto.mjs — router substrate config + target resolution.
+ * openrouter-auto.mjs, router substrate config + target resolution.
  *
  * TOPOLOGY (the stack-ops Run-1 decision B/C, end-state for Run 3's Cursor deploy):
  *
  *   Cursor (desktop/mobile)
  *     │  "Override OpenAI Base URL" → the LOCAL ROUTER's public hostname
- *     │  (a Cloudflare tunnel or a Tailscale MagicDNS host — Cursor SSRF-blocks
+ *     │  (a Cloudflare tunnel or a Tailscale MagicDNS host, Cursor SSRF-blocks
  *     │   raw localhost / private IPs, so 127.0.0.1 will NOT work)
  *     ▼
  *   Local router  ──►  privacy-gate.classify(request)
@@ -22,7 +22,7 @@
 
 import { ROUTE } from './privacy-gate.mjs';
 
-// OpenRouter Auto — the single meta-model that routes to the best-value provider.
+// OpenRouter Auto, the single meta-model that routes to the best-value provider.
 // Verified 2026-07-19: the canonical slug is `openrouter/auto` (NOT `auto-beta`).
 export const OPENROUTER_AUTO_MODEL = 'openrouter/auto';
 
@@ -38,7 +38,7 @@ export const ENDPOINTS = Object.freeze({
 });
 
 // Default model to run on the sensitive path. Opus for judgment; a caller may
-// downshift to Sonnet/Haiku for cheaper sensitive work — still Anthropic-direct.
+// downshift to Sonnet/Haiku for cheaper sensitive work, still Anthropic-direct.
 export const ANTHROPIC_DIRECT_DEFAULT_MODEL = 'claude-opus-4-8';
 
 export const CURSOR_SSRF_NOTE =
@@ -48,7 +48,7 @@ export const CURSOR_SSRF_NOTE =
   'http://127.0.0.1:PORT directly.';
 
 /**
- * resolveTarget(decision, opts) — map a privacy-gate decision to a forwarding
+ * resolveTarget(decision, opts), map a privacy-gate decision to a forwarding
  * target the local router uses to proxy the request.
  *
  * @param {{route:string}} decision  a classify() result (uses .route)
@@ -74,14 +74,14 @@ export function resolveTarget(decision, opts = {}) {
     baseUrl: ENDPOINTS.ANTHROPIC_DIRECT,
     model: opts.anthropicModel || ANTHROPIC_DIRECT_DEFAULT_MODEL,
     thirdParty: false,
-    note: route === ROUTE.ANTHROPIC_DIRECT ? undefined : `unrecognized route "${route}" — defaulted to trusted provider (deny-by-default)`,
+    note: route === ROUTE.ANTHROPIC_DIRECT ? undefined : `unrecognized route "${route}", defaulted to trusted provider (deny-by-default)`,
   };
 }
 
 /**
- * cursorBaseUrl(localRouterHost, opts) — the value to paste into Cursor's
+ * cursorBaseUrl(localRouterHost, opts), the value to paste into Cursor's
  * "Override OpenAI Base URL". Points at the LOCAL ROUTER (behind a tunnel /
- * MagicDNS), not OpenRouter directly — the gate must run first.
+ * MagicDNS), not OpenRouter directly, the gate must run first.
  *
  * @param {string} localRouterHost e.g. 'https://router.example.ts.net' or a
  *                                  Cloudflare tunnel URL. Must NOT be localhost.
@@ -91,7 +91,7 @@ export function resolveTarget(decision, opts = {}) {
  */
 export function cursorBaseUrl(localRouterHost, opts = {}) {
   if (!localRouterHost || /^https?:\/\/(?:127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1\])/i.test(localRouterHost)) {
-    throw new Error(`cursorBaseUrl: refusing localhost/private host — ${CURSOR_SSRF_NOTE}`);
+    throw new Error(`cursorBaseUrl: refusing localhost/private host, ${CURSOR_SSRF_NOTE}`);
   }
   const suffix = opts.agentMode ? '/v1/cursor' : '/v1';
   return localRouterHost.replace(/\/+$/, '') + suffix;

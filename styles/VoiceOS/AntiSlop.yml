@@ -1,20 +1,38 @@
+# GENERATED FILE, DO NOT EDIT BY HAND.
+# Source: voice-os/data/banned_list.txt (the single source of truth).
+# Regenerate: node scripts/gen-antislop.mjs
+# Verify:     node scripts/gen-antislop.mjs --check
 extends: existence
-message: "Anti-slop: '%s' reads as hype/slop or a banned word — cut it or replace with a concrete fact or trade-off."
+message: "Anti-slop: '%s' reads as hype/slop or a banned word. Cut it or replace with a concrete fact or trade-off."
 level: warning
 ignorecase: true
 tokens:
-  - kill
-  - leverage
-  - seamless(ly)?
-  - robust
-  - cutting[- ]edge
-  - game[- ]chang(er|ing)
-  - synerg(y|ies)
-  - unlock(s|ing)?
-  - delve
-  - tapestry
-  - testament to
-  - "in today's [a-z-]{2,20} landscape"
-  - best[- ]in[- ]class
-  - revolutioniz(e|ing)
-  - supercharg(e|ing|ed)
+  - 'i hope this email finds you well'
+  - 'i wanted to reach out'
+  - 'just checking in'
+  - 'touch base'
+  - 'circle back'
+  - 'leverage(s|es|ed|ing|ly)?'
+  - 'synergy(s|es|ed|ing|ly)?'
+  - 'deep dive'
+  - 'at your earliest convenience'
+  - 'please don''t hesitate to reach out'
+  - 'moving forward'
+  - 'per my last email'
+  - 'keep the lines of communication open'
+  - 'robust(s|es|ed|ing|ly)?'
+  - 'seamless(s|es|ed|ing|ly)?'
+  - 'cutting-edge(s|es|ed|ing|ly)?'
+  - 'game-changing(s|es|ed|ing|ly)?'
+  - 'unlock(s|es|ed|ing|ly)?'
+  - 'delve(s|es|ed|ing|ly)?'
+  - 'tapestry(s|es|ed|ing|ly)?'
+  - 'testament to'
+  - 'best-in-class(s|es|ed|ing|ly)?'
+  - 'revolutionize(s|es|ed|ing|ly)?'
+  - 'supercharge(s|es|ed|ing|ly)?'
+  - 'in today''s landscape'
+  - 'synergies(s|es|ed|ing|ly)?'
+  - 'game changer'
+  - 'game-changer(s|es|ed|ing|ly)?'
+  - 'game changing'

@@ -1,5 +1,5 @@
 /**
- * pr-reviewer-triage.mjs — route a pull request to the optimal AI reviewer(s).
+ * pr-reviewer-triage.mjs, route a pull request to the optimal AI reviewer(s).
  *
  * Built on the same "classify signals → routing decision" substrate as the
  * privacy gate. Encodes the stack-ops Run-1 QA tiering (decision G):
@@ -12,7 +12,7 @@
  *     or is a release/migration).
  *
  * Anti-pattern guard (decision G): NEVER run all three bots on a trivial PR, and
- * never let "AI found no issues" be the only required check — that's a human/CI
+ * never let "AI found no issues" be the only required check, that's a human/CI
  * concern the caller enforces; this module only decides which bots to invoke.
  *
  * Pure, synchronous, dependency-free.
@@ -35,7 +35,7 @@ export const REPO_TIER = Object.freeze({
 const LARGE_DIFF_LINES = 400;
 const LARGE_DIFF_FILES = 15;
 
-// Default "critical path" fragments — override via opts.criticalPaths.
+// Default "critical path" fragments, override via opts.criticalPaths.
 const DEFAULT_CRITICAL_PATHS = [
   /(?:^|\/)(?:auth|payment|billing|security|crypto|migrations?)\b/i,
   /(?:^|\/)lib\/council\.mjs$/i,   // the research/router engine
@@ -44,7 +44,7 @@ const DEFAULT_CRITICAL_PATHS = [
 ];
 
 /**
- * triagePr(pr, opts) — decide the reviewer set for a PR.
+ * triagePr(pr, opts), decide the reviewer set for a PR.
  *
  * @param {object} pr
  * @param {string} [pr.repoTier]     'standard' | 'complex' | 'production'
@@ -100,7 +100,7 @@ export function triagePr(pr = {}, opts = {}) {
   if (reviewers.size === 3 && !highStakes && !largeDiff) {
     reviewers.delete(REVIEWER.QODO);
     mergeGate = null;
-    rationale.push('Guard: dropped Qodo — three bots on a small, low-risk PR is the noise anti-pattern.');
+    rationale.push('Guard: dropped Qodo, three bots on a small, low-risk PR is the noise anti-pattern.');
   }
 
   return { reviewers: [...reviewers], rationale, mergeGate };

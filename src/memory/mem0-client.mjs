@@ -1,15 +1,15 @@
 /**
- * mem0-client.mjs — thin wrapper over mem0 (the standardized memory baseline,
- * decision E). Integrates via mem0's SDK/platform — NOT the archived
+ * mem0-client.mjs, thin wrapper over mem0 (the standardized memory baseline,
+ * decision E). Integrates via mem0's SDK/platform, NOT the archived
  * mem0ai/mem0-mcp server.
  *
  * Two backends, chosen by env:
  *   - PLATFORM (default): the hosted mem0 platform. Needs MEM0_API_KEY (Mitchell's
- *     to add — a key VALUE cannot be pasted here). `npm i mem0ai`.
+ *     to add, a key VALUE cannot be pasted here). `npm i mem0ai`.
  *   - SELF-HOST (MEM0_MODE=oss): local mem0 OSS with your own vector store.
  *
  * Fails SOFT: if the key/SDK is absent, the client degrades to a no-op memory so a
- * caller is never broken by memory being unconfigured — it just stores nothing and
+ * caller is never broken by memory being unconfigured, it just stores nothing and
  * returns []. Callers should treat memory as best-effort context, never as truth.
  *
  * mesa is DEFERRED (decision E): mem0 is the baseline; mesa gets a fair head-to-head
@@ -43,7 +43,7 @@ async function getImpl() {
       };
     }
   } catch (e) {
-    // Fail soft — no key / SDK not installed → no-op memory.
+    // Fail soft, no key / SDK not installed → no-op memory.
     _impl = {
       async add() { return { skipped: true }; },
       async search() { return []; },
