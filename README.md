@@ -25,6 +25,7 @@ wins at, encode that into a triage layer, and operate from an editor where the r
 
 This repository is designed so secrets **cannot** live in it: all API keys, credentials, personal
 configuration, and confidential material stay in a gitignored private layer and are never committed. Every
-publish passes a mandatory secret scan and an explicit file-list review first.
+publish passes a mandatory secret scan over the full tree and git history, plus an explicit file-list
+review, first.
 
 > Status: in active development. Public artifacts publish after the build phase is complete and reviewed.
