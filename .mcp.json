@@ -18,8 +18,7 @@
         "start-mcp-server",
         "--context",
         "ide-assistant",
-        "--project",
-        "/Users/mitchellwilliams/Documents/stack-ops"
+        "--project-from-cwd"
       ]
     },
     "context7": {
