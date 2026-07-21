@@ -106,7 +106,7 @@ const SECRET_PATTERNS = [
 // ID-document mentions) was REMOVED per the ruling. Do not reinstate without a
 // new ruling.
 const PII_PATTERNS = [
-  /\b\d{3}[-.]\d{2}[-.]\d{4}\b/,                               // US SSN (dash or dot; space dropped because it over-filtered SKUs/invoices with no leak-risk gain)
+  /\b\d{3}([-.])\d{2}\1\d{4}\b/,                               // US SSN (dash or dot; space dropped because it over-filtered SKUs/invoices with no leak-risk gain)
   /\bpassport\s*(?:no\.?|number|#)?\s*[:#]?\s*[A-Z0-9]{6,9}\b/i, // passport number
 ];
 
