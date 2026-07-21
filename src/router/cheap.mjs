@@ -34,8 +34,14 @@ import { homedir } from 'node:os';
 import { classifyAsync } from './privacy-gate.mjs';
 import { ROUTE } from './privacy-gate.mjs';
 
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const DECISION_LOG = join(homedir(), '.claude', 'logs', 'cheap-decisions.jsonl');
+const OPENROUTER_URL = process.env.CHEAP_OPENROUTER_URL || 'https://openrouter.ai/api/v1/chat/completions';
+const DECISION_LOG = process.env.CHEAP_DECISION_LOG || join(homedir(), '.claude', 'logs', 'cheap-decisions.jsonl');
+
+// Bounded timeout so a stuck upstream can NEVER hang the caller (2026-07-20). A
+// slow openrouter/auto pick was observed hanging a trivial request past 120s with
+// no bound, which is a large part of why no real traffic trusts this path. The
+// default is generous for bulk generation; env-overridable for tests and tuning.
+const TIMEOUT_MS = Number(process.env.CHEAP_TIMEOUT_MS) || 180000;
 
 // Archetype → model. Mirrors career-ops TASK_ROUTING_LADDERS' cheap rungs; kept as
 // a local copy on purpose so this CLI has no cross-repo import. Prices per Mtok
@@ -137,6 +143,7 @@ let res;
 try {
   res = await fetch(OPENROUTER_URL, {
     method: 'POST',
+    signal: AbortSignal.timeout(TIMEOUT_MS),
     headers: {
       'Authorization': `Bearer ${key}`,
       'Content-Type': 'application/json',
@@ -154,12 +161,22 @@ try {
     }),
   });
 } catch (e) {
-  console.error(`cheap: request failed, ${e.message}`);
-  process.exit(5);
+  // AbortSignal.timeout fires a TimeoutError; a manual abort fires AbortError.
+  const timedOut = e?.name === 'TimeoutError' || e?.name === 'AbortError';
+  console.error(timedOut
+    ? `cheap: upstream did not respond within ${TIMEOUT_MS}ms, aborted. Do this one inline in Claude Code (it is already on the trusted path).`
+    : `cheap: request failed, ${e.message}`);
+  // Log the failure so a hang/timeout is VISIBLE in the decision log, not silent.
+  logDecision({ ts: new Date().toISOString(), outcome: timedOut ? 'timeout' : 'error',
+    task: args.task || null, requested: model, detail: e?.message ?? String(e), chars: body.length, ms: Date.now() - started });
+  process.exit(timedOut ? 7 : 5);
 }
 
 if (!res.ok) {
-  console.error(`cheap: OpenRouter returned ${res.status} ${res.statusText}\n${(await res.text()).slice(0, 500)}`);
+  const errText = (await res.text()).slice(0, 500);
+  console.error(`cheap: OpenRouter returned ${res.status} ${res.statusText}\n${errText}`);
+  logDecision({ ts: new Date().toISOString(), outcome: 'http_error', task: args.task || null,
+    requested: model, status: res.status, chars: body.length, ms: Date.now() - started });
   process.exit(6);
 }
 
