@@ -17,9 +17,7 @@
         "serena",
         "start-mcp-server",
         "--context",
-        "ide-assistant",
-        "--project",
-        "/Users/mitchellwilliams/Documents/stack-ops"
+        "ide-assistant"
       ]
     },
     "context7": {
