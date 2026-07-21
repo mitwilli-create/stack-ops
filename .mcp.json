@@ -17,7 +17,8 @@
         "serena",
         "start-mcp-server",
         "--context",
-        "ide-assistant"
+        "ide-assistant",
+        "--project-from-cwd"
       ]
     },
     "context7": {
