@@ -55,7 +55,6 @@ const LADDERS = {
   structured_extraction: ['openai/gpt-oss-120b', 'qwen/qwen3-coder-30b-a3b-instruct'],
   long_context:          ['deepseek/deepseek-v4-flash', 'z-ai/glm-4.7-flash'],        // 1M / 200k ctx
 };
-const DEFAULT_MODEL = 'openrouter/auto';
 
 // Below this, orchestration overhead beats the saving. Advisory, not a hard stop.
 const BULK_THRESHOLD_CHARS = 2000;
@@ -120,7 +119,21 @@ if (decision.route !== ROUTE.AUTO) {
 }
 
 const ladder = LADDERS[args.task] || [];
-const model = args.model || ladder[0] || DEFAULT_MODEL;
+
+// An untagged call (no --task and no --model) used to fall through to a catch-all
+// pick, which OpenRouter Auto could land on a FRONTIER model. That silently turns a
+// "cheap" call into a premium one, the exact cost-hiding this command exists to
+// avoid. So refuse, same posture as the privacy-gate refusal above: no routing
+// target, do it inline (already on the trusted path) or name one explicitly.
+if (!args.model && ladder.length === 0) {
+  const tasks = Object.keys(LADDERS).join(', ');
+  console.error(`cheap: REFUSED, no routing target. Pass --task <one of: ${tasks}> or an explicit --model,\n` +
+    `  or do this one inline in Claude Code (it is already on the trusted path).`);
+  logDecision({ ts: new Date().toISOString(), outcome: 'refused', reason: 'no-task-or-model', task: args.task || null, chars: body.length });
+  process.exit(8);
+}
+
+const model = args.model || ladder[0];
 
 if (body.length < BULK_THRESHOLD_CHARS && !args.dryRun) {
   console.error(`cheap: note, input is ${body.length} chars, under the ${BULK_THRESHOLD_CHARS} bulk threshold. ` +
@@ -138,64 +151,108 @@ if (!key) {
   process.exit(4);
 }
 
-const started = Date.now();
-let res;
-try {
-  res = await fetch(OPENROUTER_URL, {
-    method: 'POST',
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-    headers: {
-      'Authorization': `Bearer ${key}`,
-      'Content-Type': 'application/json',
-      'X-Title': 'stack-ops cheap',
-    },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: 'user', content: body }],
-      // ZERO-DATA-RETENTION IS MANDATORY on this path (ruled 2026-07-19). Auto can
-      // land a prompt at ANY catalog provider under varying retention terms, so the
-      // fix is at the mechanism, not the data. `data_collection: 'deny'` restricts
-      // routing to providers that do not train on or retain prompts. A provider
-      // that cannot honour it simply does not receive this traffic.
-      provider: { data_collection: 'deny' },
-    }),
+// Try the task's ladder rung by rung. Before this the second rung was dead code: a
+// single `ladder[0]` with no fallback meant one bad upstream (HTTP error, timeout,
+// or empty completion) failed the whole call instead of stepping down to the next
+// cheap model. An explicit --model opts out of the ladder and stands alone.
+const candidates = args.model ? [args.model] : ladder;
+let lastExit = 5;
+
+for (let i = 0; i < candidates.length; i++) {
+  const rungModel = candidates[i];
+  const started = Date.now();
+  let res;
+  try {
+    res = await fetch(OPENROUTER_URL, {
+      method: 'POST',
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      headers: {
+        'Authorization': `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        'X-Title': 'stack-ops cheap',
+      },
+      body: JSON.stringify({
+        model: rungModel,
+        messages: [{ role: 'user', content: body }],
+        // ZERO-DATA-RETENTION IS MANDATORY on this path (ruled 2026-07-19). Auto can
+        // land a prompt at ANY catalog provider under varying retention terms, so the
+        // fix is at the mechanism, not the data. `data_collection: 'deny'` restricts
+        // routing to providers that do not train on or retain prompts. A provider
+        // that cannot honour it simply does not receive this traffic.
+        provider: { data_collection: 'deny' },
+      }),
+    });
+  } catch (e) {
+    // AbortSignal.timeout fires a TimeoutError; a manual abort fires AbortError.
+    const timedOut = e?.name === 'TimeoutError' || e?.name === 'AbortError';
+    console.error(timedOut
+      ? `cheap: ${rungModel} did not respond within ${TIMEOUT_MS}ms, aborted.`
+      : `cheap: ${rungModel} request failed, ${e.message}`);
+    // Log every attempt so a step-down is VISIBLE in the decision log, not silent.
+    logDecision({ ts: new Date().toISOString(), outcome: timedOut ? 'timeout' : 'error',
+      task: args.task || null, requested: rungModel, rung: i, detail: e?.message ?? String(e), chars: body.length, ms: Date.now() - started });
+    lastExit = timedOut ? 7 : 5;
+    continue;
+  }
+
+  if (!res.ok) {
+    // Reading the error body can itself throw (dropped connection mid-body); a
+    // failure here must not escape the loop, so swallow it and keep the status.
+    const errText = await res.text().catch(() => '').then(t => t.slice(0, 500));
+    console.error(`cheap: ${rungModel} returned ${res.status} ${res.statusText}\n${errText}`);
+    logDecision({ ts: new Date().toISOString(), outcome: 'http_error', task: args.task || null,
+      requested: rungModel, rung: i, status: res.status, chars: body.length, ms: Date.now() - started });
+    lastExit = 6;
+    continue;
+  }
+
+  // res.json() runs outside the fetch try/catch, so a 200 with a truncated or
+  // non-JSON body would otherwise reject and crash the whole call instead of
+  // stepping down. Treat an unparseable body as a soft failure and try the next rung.
+  let json;
+  try {
+    json = await res.json();
+  } catch (e) {
+    console.error(`cheap: ${rungModel} returned an unparseable body, ${e.message}`);
+    logDecision({ ts: new Date().toISOString(), outcome: 'error', task: args.task || null,
+      requested: rungModel, rung: i, detail: e?.message ?? String(e), chars: body.length, ms: Date.now() - started });
+    lastExit = 5;
+    continue;
+  }
+  const text = json?.choices?.[0]?.message?.content ?? '';
+  if (!text.trim()) {
+    // An empty completion is a soft failure: the rung answered but returned nothing
+    // usable, so step down rather than emit a blank as if it were the answer.
+    console.error(`cheap: ${rungModel} returned an empty completion.`);
+    logDecision({ ts: new Date().toISOString(), outcome: 'empty', task: args.task || null,
+      requested: rungModel, rung: i, served: json?.model ?? null, chars: body.length, ms: Date.now() - started });
+    lastExit = 5;
+    continue;
+  }
+
+  process.stdout.write(text.endsWith('\n') ? text : text + '\n');
+
+  // The decision log is what turns "Auto misroutes" from an argument into a measured
+  // fact. Escalation-as-label: if Mitchell re-asks or redoes a task in the main loop,
+  // that row was under-routed.
+  logDecision({
+    ts: new Date().toISOString(),
+    outcome: 'ok',
+    task: args.task || null,
+    requested: rungModel,
+    rung: i,
+    served: json?.model ?? null,          // what the provider actually served
+    provider: json?.provider ?? null,
+    usage: json?.usage ?? null,
+    chars: body.length,
+    files: args.files.length,
+    ms: Date.now() - started,
   });
-} catch (e) {
-  // AbortSignal.timeout fires a TimeoutError; a manual abort fires AbortError.
-  const timedOut = e?.name === 'TimeoutError' || e?.name === 'AbortError';
-  console.error(timedOut
-    ? `cheap: upstream did not respond within ${TIMEOUT_MS}ms, aborted. Do this one inline in Claude Code (it is already on the trusted path).`
-    : `cheap: request failed, ${e.message}`);
-  // Log the failure so a hang/timeout is VISIBLE in the decision log, not silent.
-  logDecision({ ts: new Date().toISOString(), outcome: timedOut ? 'timeout' : 'error',
-    task: args.task || null, requested: model, detail: e?.message ?? String(e), chars: body.length, ms: Date.now() - started });
-  process.exit(timedOut ? 7 : 5);
+  process.exit(0);
 }
 
-if (!res.ok) {
-  const errText = (await res.text()).slice(0, 500);
-  console.error(`cheap: OpenRouter returned ${res.status} ${res.statusText}\n${errText}`);
-  logDecision({ ts: new Date().toISOString(), outcome: 'http_error', task: args.task || null,
-    requested: model, status: res.status, chars: body.length, ms: Date.now() - started });
-  process.exit(6);
-}
-
-const json = await res.json();
-const text = json?.choices?.[0]?.message?.content ?? '';
-process.stdout.write(text.endsWith('\n') ? text : text + '\n');
-
-// The decision log is what turns "Auto misroutes" from an argument into a measured
-// fact. Escalation-as-label: if Mitchell re-asks or redoes a task in the main loop,
-// that row was under-routed.
-logDecision({
-  ts: new Date().toISOString(),
-  outcome: 'ok',
-  task: args.task || null,
-  requested: model,
-  served: json?.model ?? null,          // what Auto actually picked
-  provider: json?.provider ?? null,
-  usage: json?.usage ?? null,
-  chars: body.length,
-  files: args.files.length,
-  ms: Date.now() - started,
-});
+// Every rung failed. Point back to the trusted path, same as the refusal/timeout
+// messages above; the exit code carries the last rung's failure kind.
+console.error(`cheap: all ${candidates.length} model(s) for this task failed. ` +
+  `Do this one inline in Claude Code (it is already on the trusted path).`);
+process.exit(lastExit);
