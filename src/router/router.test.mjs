@@ -49,6 +49,13 @@ const CREDENTIAL_FORMATS = {
   'Visa card number':          'card 4111111111111111 exp 04/29',
   'Mastercard number':        'pay with 5555555555554444',
   'Amex number':               'amex 378282246310005',
+  // Grouped separators are the dominant real-world card format; without these the
+  // scanner under-filtered them straight to the cheap path (verify 2026-07-20).
+  'Visa card, space-grouped':  'card 4111 1111 1111 1111 exp 04/29',
+  'Visa card, dash-grouped':   'card 4111-1111-1111-1111 exp 04/29',
+  'Amex, space-grouped':       'amex 3782 822463 10005',
+  // The header is normally uppercase, but a downcase must not evade the scanner.
+  'PEM key, lowercased header':'-----begin private key-----\nMIIEow...',
 };
 
 for (const [format, sample] of Object.entries(CREDENTIAL_FORMATS)) {
@@ -112,6 +119,15 @@ test('gate: SSN → anthropic-direct', () => {
   const d = classify({ text: 'SSN 123-45-6789' }, cfg);
   assert.equal(d.route, ROUTE.ANTHROPIC_DIRECT);
   assert.ok(d.reasons.some(r => r.signal === SIGNAL.PII));
+});
+
+test('gate: dotted SSN is gated; space-separated is deliberately NOT', () => {
+  // Dotted variant under-filtered before 2026-07-20 and is now caught. Space
+  // separator was rejected: "123 45 6789"-shaped runs are common in SKUs/invoices,
+  // so matching them over-filters ordinary work to the expensive path with no real
+  // leak-risk gain (canonical SSN is dash-delimited).
+  assert.equal(classify({ text: 'SSN 123.45.6789' }, cfg).route, ROUTE.ANTHROPIC_DIRECT);
+  assert.equal(classify({ text: 'invoice 123 45 6789 total' }, cfg).route, ROUTE.AUTO);
 });
 
 test('gate: passport NUMBER is gated, but the word alone is not', () => {

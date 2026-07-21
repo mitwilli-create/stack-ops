@@ -59,6 +59,16 @@ export const SIGNAL = Object.freeze({
 // ── Credential patterns, the load-bearing control ───────────────────────────
 // Every format below has a dedicated test in router.test.mjs. Add a format here
 // and add its test in the same change; this list is the security boundary.
+//
+// KNOWN LIMITATION (verify 2026-07-20, ruled scope-note + ZDR): this is a
+// PREFIX/LABEL scanner. A label-less high-entropy blob (a bare 40/64-char hex or
+// base64 string with no recognizable prefix and no key=/token: label) will NOT
+// match and routes CHEAP. A Shannon-entropy heuristic was rejected: on a coding
+// substrate full of git SHAs, content hashes, and UUIDs it over-filters ordinary
+// work constantly. The residual risk is covered by the mandatory zero-data-
+// retention control on the cheap path (AGENTS.md: a provider that cannot honour
+// ZDR gets no traffic). Do not add entropy detection without a ruling that
+// accepts the over-filter cost.
 const SECRET_PATTERNS = [
   /\b(?:sk|rk|pk)-[A-Za-z0-9_\-]{16,}/,                         // OpenAI-style (incl. sk-ant-, sk-proj-)
   /\bxai-[A-Za-z0-9]{16,}\b/,                                   // xAI
@@ -70,7 +80,7 @@ const SECRET_PATTERNS = [
   /\bAQ\.Ab[A-Za-z0-9_\-]{10,}/,                                // Google OAuth / AQ.Ab-prefixed token
   /\bya29\.[A-Za-z0-9_\-]{20,}/,                                // Google OAuth access token
   /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/,                           // Slack tokens
-  /-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----/,                   // PEM private key block
+  /-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----/i,                  // PEM private key block (case-insensitive: header is normally upper, but downcase must not evade)
   /\bAuthorization\s*:\s*Bearer\s+[A-Za-z0-9._\-]{16,}/i,       // bearer token in a header
   /\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}/, // JWT
   /\b(?:api[_-]?key|secret|bearer|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|totp[_-]?secret)\b\s*[:=]\s*['"]?[A-Za-z0-9\-_.]{12,}/i,
@@ -82,8 +92,13 @@ const SECRET_PATTERNS = [
   // a BEARER INSTRUMENT, whoever holds it can spend it, which puts it in the same
   // class as an API key, not the same class as a salary figure. Asymmetric failure
   // modes: a false positive costs one request routed to Anthropic; a false negative
-  // puts a live card number in a third party's logs.
+  // puts a live card number in a third party's logs. Two forms: contiguous
+  // digits, AND the dominant real-world grouped form with single space/hyphen
+  // separators (4-4-4-4 for Visa/MC/Discover, 4-6-5 for Amex). Without the
+  // grouped form, "4111 1111 1111 1111" leaked to the cheap path.
   /\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b/,
+  /\b(?:4[0-9]{3}|5[1-5][0-9]{2}|6(?:011|5[0-9]{2}))(?:[ -][0-9]{4}){3}\b/,   // 16-digit grouped (Visa/MC/Discover)
+  /\b3[47][0-9]{2}[ -][0-9]{6}[ -][0-9]{5}\b/,                                 // 15-digit grouped (Amex, 4-6-5)
 ];
 
 // ── PII, collapsed to the two identifiers he still considers sensitive ──────
@@ -91,7 +106,7 @@ const SECRET_PATTERNS = [
 // ID-document mentions) was REMOVED per the ruling. Do not reinstate without a
 // new ruling.
 const PII_PATTERNS = [
-  /\b\d{3}-\d{2}-\d{4}\b/,                                      // US SSN
+  /\b\d{3}[-.]\d{2}[-.]\d{4}\b/,                               // US SSN (dash or dot; space dropped because it over-filtered SKUs/invoices with no leak-risk gain)
   /\bpassport\s*(?:no\.?|number|#)?\s*[:#]?\s*[A-Z0-9]{6,9}\b/i, // passport number
 ];
 
