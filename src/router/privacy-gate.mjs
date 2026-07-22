@@ -315,8 +315,24 @@ export function classify(input, config = buildConfig()) {
   //    NEVER exempted by the allowlist.
   // Normalize rawPaths too: a caller can pass a Windows path in the paths array
   // just as easily as pasting one in text, and the same anchors apply.
-  const pathBlob = rawPaths.map(normalizePathToken).join('\n');
-  const allowlisted = anyMatch(config.allowlist, pathBlob);
+  //
+  // PER-CANDIDATE, not per-request (fixed 2026-07-22, CodeRabbit round 2). The
+  // allowlist used to be evaluated against the JOINED blob, so ONE allowlisted
+  // path exempted every other path in the same request. Reproduced:
+  //   paths: ['stack-ops/docs/x.md', '~/.aws/credentials']  ->  route AUTO,
+  // with an EMPTY reasons array, so a credential path left the machine and the
+  // decision looked clean in the log. That is the severe direction (under-filter).
+  // The mirror-image defect was also present: paths extracted from TEXT were
+  // never checked against the allowlist at all, so an allowlisted path mentioned
+  // in prose could never be exempted.
+  //
+  // Both come from the same mistake, treating a set of paths as one string. Each
+  // candidate is now judged on its own: a private match is suppressed only when
+  // THAT candidate is itself allowlisted.
+  const candidates = [
+    ...rawPaths.map(normalizePathToken),
+    ...extractPathLikeTokens(text),
+  ];
   // NARROWED 2026-07-22 by ruling (see research/gate-triage-audit-2026-07-22.md).
   // This used to match private-path patterns against the WHOLE of `text`, which
   // made the gate fire on ordinary prose: writing the word "credentials" in a
@@ -331,9 +347,17 @@ export function classify(input, config = buildConfig()) {
   // mentions one no longer does. The credential SCANNER is untouched and remains
   // the load-bearing control: if that doc contained an actual key rather than a
   // reference to where a key lives, signal 1 above still catches it.
-  const pathHit = anyMatch(config.privatePathPatterns, pathBlob)
-    || anyMatch(config.privatePathPatterns, extractPathLikeTokens(text).join('\n'));
-  if (pathHit && !allowlisted) reasons.push({ signal: SIGNAL.PRIVATE_PATH, detail: `matched ${pathHit.source.slice(0, 48)}` });
+  let pathHit = null;
+  for (const cand of candidates) {
+    const hit = anyMatch(config.privatePathPatterns, cand);
+    if (!hit) continue;
+    // Allowlist THIS candidate only. Never exempts secret/PII/employer content,
+    // which are separate signals evaluated above and are not reachable from here.
+    if (anyMatch(config.allowlist, cand)) continue;
+    pathHit = hit;
+    break;
+  }
+  if (pathHit) reasons.push({ signal: SIGNAL.PRIVATE_PATH, detail: `matched ${pathHit.source.slice(0, 48)}` });
 
   // 5. Infra / secrets operations. Denies for credential-exposure reasons, not
   //    privacy, this work quotes key names and vault layout inline.

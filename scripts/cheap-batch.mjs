@@ -48,9 +48,20 @@ const scheduled = args.includes('--scheduled');
 // invocation (`--apply --scheduled`) would have done every night. The live-fire
 // test missed it because the kill switch returns before job selection is reached.
 // Guard the index, matching the arg() helper in publish-report-to-notebooklm.mjs.
+// A trailing `--job` with no value returned undefined, indistinguishable from the
+// flag being absent, so `--apply --job` silently ran the FULL job set instead of
+// the one the caller was trying to name. Under --apply that executes unintended
+// work. Absent flag still returns undefined; a flag with no usable value is now a
+// hard exit.
 function flagValue(flag) {
   const i = args.indexOf(flag);
-  return i !== -1 ? args[i + 1] : undefined;
+  if (i === -1) return undefined;
+  const value = args[i + 1];
+  if (!value || value.startsWith('--')) {
+    console.error(`cheap-batch: ${flag} requires a value.`);
+    process.exit(2);
+  }
+  return value;
 }
 const onlyJob = flagValue('--job');
 

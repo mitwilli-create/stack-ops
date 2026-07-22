@@ -332,3 +332,28 @@ test('gate: PERFORMING a secrets rotation is still gated', () => {
   assert.equal(r.route, ROUTE.ANTHROPIC_DIRECT);
   assert.equal(r.reasons[0].signal, SIGNAL.INFRA);
 });
+
+// ── CodeRabbit round 2, PR #3 (2026-07-22) ──────────────────────────────────
+
+test('gate: an allowlisted path does NOT exempt a private path beside it', () => {
+  // The severe direction. Before the per-candidate fix this returned AUTO with an
+  // EMPTY reasons array: a credential path left the machine and the decision
+  // looked clean in the log.
+  const r = classify({ text: 'summarize these', paths: ['stack-ops/docs/x.md', '~/.aws/credentials'] }, cfg);
+  assert.equal(r.route, ROUTE.ANTHROPIC_DIRECT, `leaked: ${JSON.stringify(r.reasons)}`);
+  assert.equal(r.reasons[0].signal, SIGNAL.PRIVATE_PATH);
+});
+
+test('gate: an allowlisted path alone still routes cheap', () => {
+  // Guard the other direction, so the fix above is a narrowing of the exemption
+  // and not a removal of it.
+  const r = classify({ text: 'summarize this', paths: ['stack-ops/docs/x.md'] }, cfg);
+  assert.equal(r.route, ROUTE.AUTO, JSON.stringify(r.reasons));
+});
+
+test('gate: the allowlist now applies to paths found in TEXT too', () => {
+  // Mirror-image defect: text-extracted paths were never allowlist-checked, so an
+  // allowlisted path mentioned in prose could never be exempted.
+  const r = classify({ text: 'check stack-ops/docs/mcp-layer.md for the wording' }, cfg);
+  assert.equal(r.route, ROUTE.AUTO, JSON.stringify(r.reasons));
+});
