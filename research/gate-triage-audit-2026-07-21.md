@@ -37,7 +37,15 @@ privacy-gate: ~45ms per real invocation incl. Node cold-start; pure-regex, no ne
 ## Triage
 rapid:   PASS, 45ms/decision, far under budget; cheap.mjs has a 180s upstream timeout so a stuck Auto pick can't hang the caller.
 regular: **FAIL (adoption)**, decision log = 16 lines total, 4 ok / 12 refused, no sustained real traffic. Delegated career-ops work that SHOULD route here does NOT (it hits frontier APIs directly). The 3 historical `served: openai/gpt-5.6-sol` rows are the pre-fix untagged→frontier leak fingerprint; the untagged-refusal now closes that specific hole, but real bulk work still isn't being sent through the CLI at all.
-optimal: PARTIAL, for the task classes it covers, routing is correct (bulk/mechanical/log/extraction → cheap OpenRouter models). BUT the ladder has **no research/QA archetype**, so research-class work (career-ops council/intel on Perplexity `sonar-deep-research`) has no cheap rung and defaults to the most expensive frontier path, the Perplexity overage.
+optimal: PARTIAL, for the task classes it covers, routing is correct (bulk/mechanical/log/extraction → cheap OpenRouter models). BUT the ladder has **no research/QA archetype**, so research-class work (career-ops council/intel on Perplexity `sonar-deep-research`) has no cheap rung.
+
+> **CORRECTED 2026-07-22.** This originally read "defaults to the most expensive
+> frontier path". That is wrong for this CLI: `cheap.mjs` REFUSES an untagged call
+> outright (exit 8, added after this audit was written), so nothing silently
+> downgrades to frontier here. Callers OUTSIDE the CLI (career-ops council and
+> intel hitting Perplexity `sonar-deep-research` directly) do still route to
+> frontier providers, and that is where the Perplexity overage actually comes
+> from. Defect 1 below already names that as the real cause.
 
 ## Defects, ranked by blast radius (= overage-reduction impact)
 1. **[HIGHEST] Substrate not wired into career-ops.** ~40 scripts call `api.anthropic.com` (Opus) and Perplexity `sonar-deep-research` directly, bypassing the proven-cheap gate+ladder. This is the entire overage. Fix: route delegated LLM work through `cheap --task …`; keep only genuinely deep/sensitive work on the frontier path. (Execute via `~/career-ops-cost-optimization-prompt.md`.)

@@ -295,3 +295,40 @@ test('gate: narrowing did NOT weaken the credential scanner', () => {
   assert.equal(r.route, ROUTE.ANTHROPIC_DIRECT);
   assert.equal(r.reasons[0].signal, SIGNAL.SECRET);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CodeRabbit review round 1, PR #3 (2026-07-22). Every case below is a real
+// finding from that review, not hypothetical coverage.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('gate: Windows-separator private path is caught (was a bypass)', () => {
+  // Backslash tokens were collected but never normalized, while the patterns
+  // anchor on `/`. So this routed externally. Found by review, not by the corpus:
+  // every planted case used POSIX paths.
+  // Isolating the behavior under test took three attempts, which is the point of
+  // the can-fail rule. `id_rsa` matches a bare-filename pattern; `api-keys.env`
+  // matches a separator-independent one. Both passed with the normalizer DELETED,
+  // i.e. green for the wrong reason. `.ssh\\config` matches only via the
+  // `(?:^|\/)\.ssh(?:\/|$)` anchor, so it goes red without normalization.
+  const r = classify({ text: 'open C:\\Users\\me\\.ssh\\config and check it' }, cfg);
+  assert.equal(r.route, ROUTE.ANTHROPIC_DIRECT);
+});
+
+test('gate: Windows-separator path in the paths ARRAY is caught too', () => {
+  const r = classify({ text: 'x', paths: ['C:\\Users\\me\\.aws\\credentials'] }, cfg);
+  assert.equal(r.route, ROUTE.ANTHROPIC_DIRECT);
+  assert.equal(r.reasons[0].signal, SIGNAL.PRIVATE_PATH);
+});
+
+test('gate: DESCRIBING a secrets rotation policy routes cheap', () => {
+  // The action-verb rule was applied to secret-scan but not to
+  // rotation/hardening, so this still blocked, contradicting the narrowing.
+  const r = classify({ text: 'Our secrets rotation policy is documented in the handbook.' }, cfg);
+  assert.equal(r.route, ROUTE.AUTO, JSON.stringify(r.reasons));
+});
+
+test('gate: PERFORMING a secrets rotation is still gated', () => {
+  const r = classify({ text: 'run the secrets rotation for the council server now' }, cfg);
+  assert.equal(r.route, ROUTE.ANTHROPIC_DIRECT);
+  assert.equal(r.reasons[0].signal, SIGNAL.INFRA);
+});

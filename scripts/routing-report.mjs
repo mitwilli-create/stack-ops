@@ -42,7 +42,12 @@ const FRONTIER_BLENDED_PER_MTOK = Number(process.env.FRONTIER_BLENDED_PER_MTOK) 
 
 const args = process.argv.slice(2);
 const asJson = args.includes('--json');
-const weeks = Number(args[args.indexOf('--weeks') + 1]) || 8;
+// Guard the index: a missing flag gives indexOf === -1 and -1 + 1 === 0, so the
+// value silently becomes args[0]. Number() coercion masks it here (NaN falls back
+// to 8), but the defect shape is the same one that was an active bug in
+// cheap-batch.mjs, so fix it in both rather than relying on the coincidence.
+const weeksIdx = args.indexOf('--weeks');
+const weeks = Number(weeksIdx !== -1 ? args[weeksIdx + 1] : undefined) || 8;
 
 if (!existsSync(LOG)) {
   console.error(`routing-report: no decision log at ${LOG}. Nothing has routed yet.`);

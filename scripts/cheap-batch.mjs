@@ -40,7 +40,19 @@ const MAX_BYTES = Number(process.env.CHEAP_BATCH_MAX_INPUT_BYTES) || 400_000;
 const args = process.argv.slice(2);
 const apply = args.includes('--apply');
 const scheduled = args.includes('--scheduled');
-const onlyJob = args[args.indexOf('--job') + 1];
+
+// `args[args.indexOf(f) + 1]` is a trap: a missing flag gives indexOf === -1, and
+// -1 + 1 === 0, so the value silently becomes args[0]. Here that was an ACTIVE
+// bug, not a latent one: `--apply` alone resolved onlyJob to "--apply" and the
+// run died with "no job named --apply", which is exactly what the launchd
+// invocation (`--apply --scheduled`) would have done every night. The live-fire
+// test missed it because the kill switch returns before job selection is reached.
+// Guard the index, matching the arg() helper in publish-report-to-notebooklm.mjs.
+function flagValue(flag) {
+  const i = args.indexOf(flag);
+  return i !== -1 ? args[i + 1] : undefined;
+}
+const onlyJob = flagValue('--job');
 
 // Kill switch, checked ONLY under --scheduled so a deliberate manual run is
 // never silently a no-op. Must be exactly 'true'; anything else means off.

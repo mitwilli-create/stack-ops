@@ -113,6 +113,15 @@ Decision log lifetime (16 rows, 2026-07-20 to 2026-07-22):
 
 Total lifetime cheap-path spend: **$0.0099**.
 
+**Reconciliation note** (added 2026-07-22 after review flagged the two figure sets
+as inconsistent). The $0.0099 / 4-successful-calls figures describe the LIFETIME
+production log at `~/.claude/logs/cheap-decisions.jsonl`. The 7-of-7 / $0.00548
+figures further down describe THIS AUDIT's live archetype probes, which were
+written to a separate scratch log via `CHEAP_DECISION_LOG` precisely so
+verification traffic would not contaminate the adoption baseline. The two sets are
+disjoint by construction and are not meant to sum. Any figure quoted as "lifetime"
+excludes probe traffic.
+
 So: essentially 0% of delegated work is being routed. Effectively 100% of real
 work is handled by the Claude Code main loop on the flat subscription. That is
 not a dollar cost, it is a throughput and context cost: bulk toil that could run

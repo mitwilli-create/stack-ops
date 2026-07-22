@@ -141,7 +141,11 @@ const DEFAULT_INFRA_PATTERNS = [
   // layout inline, so it now requires an action verb, which is what separates
   // doing the work from describing it.
   /\b(?:run|running|perform|do|doing|execute|start)\s+(?:an?\s+|the\s+)?secret[- ]scan\b/i,
-  /\bsecrets? (?:rotation|hardening)\b/i,
+  // Rotation/hardening needs the same action verb as secret-scan above. Without
+  // it, "the secrets rotation policy" in a doc still blocked, which contradicts
+  // the rule this narrowing was supposed to establish.
+  /\b(?:run|running|perform|do|doing|execute|start|begin|schedule)\s+(?:an?\s+|the\s+)?secrets? (?:rotation|hardening)\b/i,
+  /\brotate\s+(?:the\s+)?secrets?\b/i,
   /\bsecrets-launchd-setenv\b|\blaunchctl setenv\b/i,
   /\bvault\b.*\b(?:key|secret|token)\b/i,
 ];
@@ -213,6 +217,25 @@ export async function loadPrivateConfig() {
  * @param {string} str
  * @returns {string[]}
  */
+/**
+ * Normalize a path-like token to the forward-slash form the patterns expect.
+ *
+ * Backslash separators were being COLLECTED but never normalized, while the
+ * patterns anchor on `(?:^|\/)`. So `C:\Users\me\.aws\credentials` was gathered
+ * as a token and then matched nothing, routing externally. Found by review, not
+ * by the corpus: every planted case used POSIX paths, which is exactly the blind
+ * spot a corpus drawn from one platform produces.
+ *
+ * @param {string} token
+ * @returns {string}
+ */
+function normalizePathToken(token) {
+  return token
+    .replace(/\\/g, '/')            // Windows separators first, so the anchors work
+    .replace(/^~/, '/home')
+    .replace(/^\.\.?\//, '/');
+}
+
 export function extractPathLikeTokens(str) {
   if (typeof str !== 'string' || !str) return [];
   const out = [];
@@ -226,7 +249,7 @@ export function extractPathLikeTokens(str) {
     if (tok.includes('/') || tok.includes('\\')) {
       // Normalize `~/x` and `./x` so the `(?:^|\/)` anchors behave the same way
       // they do on a real absolute path.
-      out.push(tok.replace(/^~/, '/home').replace(/^\.\.?\//, '/'));
+      out.push(normalizePathToken(tok));
       continue;
     }
     // A bare dotfile with no slash is still a filename the path patterns care
@@ -290,7 +313,9 @@ export function classify(input, config = buildConfig()) {
   // 4. Private paths, in the referenced paths OR mentioned in the text, unless
   //    an allowlist entry exempts the path. Secret/PII/employer content above is
   //    NEVER exempted by the allowlist.
-  const pathBlob = rawPaths.join('\n');
+  // Normalize rawPaths too: a caller can pass a Windows path in the paths array
+  // just as easily as pasting one in text, and the same anchors apply.
+  const pathBlob = rawPaths.map(normalizePathToken).join('\n');
   const allowlisted = anyMatch(config.allowlist, pathBlob);
   // NARROWED 2026-07-22 by ruling (see research/gate-triage-audit-2026-07-22.md).
   // This used to match private-path patterns against the WHOLE of `text`, which
