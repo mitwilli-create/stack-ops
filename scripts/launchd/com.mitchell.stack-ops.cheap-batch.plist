@@ -13,8 +13,23 @@
   Arm only after a live verification:
     node scripts/cheap-batch.mjs                 # DRY, calls nothing
     node scripts/cheap-batch.mjs --apply         # one real run, check the output
-    # then add CHEAP_BATCH_ENABLED=true to the environment, and:
+    printf '\nexport CHEAP_BATCH_ENABLED=true\n' >> ~/.zshenv
+    cp scripts/launchd/com.mitchell.stack-ops.cheap-batch.plist ~/Library/LaunchAgents/
+    /usr/libexec/PlistBuddy -c "Set :Disabled false" ~/Library/LaunchAgents/com.mitchell.stack-ops.cheap-batch.plist
+    launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.mitchell.stack-ops.cheap-batch.plist
     launchctl enable gui/$UID/com.mitchell.stack-ops.cheap-batch
+
+  THE ENV VAR MUST GO IN THE LOGIN SHELL (~/.zshenv), NOT A PROJECT .env.
+  launchd jobs inherit no shell environment, and this script reads the switch
+  from process.env. A project .env would leave the job no-opping FOREVER with no
+  error, because a disabled kill switch exits 0 by design. The only reason a
+  login-shell export works at all is that ProgramArguments invokes `zsh -lc`.
+  Verified 2026-07-22 by exporting it in ~/.zshenv and running the exact
+  ProgramArguments command: the run got past the kill switch.
+
+  Also create the log directory first, or launchd fails SILENTLY on the
+  StandardOutPath/StandardErrorPath below:
+    mkdir -p ~/Library/Logs/stack-ops
 
   Note: `launchctl disable` persists across bootstraps. If a bootstrap returns
   "Input/output error" with a valid plist, check `launchctl print-disabled`.
