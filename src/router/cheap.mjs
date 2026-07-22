@@ -44,16 +44,35 @@ const DECISION_LOG = process.env.CHEAP_DECISION_LOG || join(homedir(), '.claude'
 const TIMEOUT_MS = Number(process.env.CHEAP_TIMEOUT_MS) || 180000;
 
 // Archetype → model. Mirrors career-ops TASK_ROUTING_LADDERS' cheap rungs; kept as
-// a local copy on purpose so this CLI has no cross-repo import. Prices per Mtok
-// in/out, verified against the live OpenRouter catalog 2026-07-19, re-check
-// before trusting them, they move.
+// a local copy on purpose so this CLI has no cross-repo import.
+//
+// PRICES ARE PER MODEL, NOT PER LADDER. Until 2026-07-22 each ladder carried one
+// price pair that described only its FIRST rung and was silently attributed to the
+// fallback too. That understated `glm-4.7-flash` output by 48% and `deepseek-v4-flash`
+// input by 2.5x, on the exact rungs that carry the largest payloads. Any cost model
+// built from the old annotations was wrong on every step-down. Annotate per model so
+// a fallback's real price is visible at the point of fallback.
+//
+// Per Mtok in/out, verified against the live OpenRouter catalog API 2026-07-22.
+// They move: re-check with `curl -s https://openrouter.ai/api/v1/models` before
+// trusting these for any spend estimate.
+//
+//   openai/gpt-oss-120b                    $0.037 / $0.170
+//   deepseek/deepseek-v4-flash             $0.098 / $0.196    1,048,576 ctx
+//   qwen/qwen3-coder-30b-a3b-instruct      $0.070 / $0.270
+//   qwen/qwen3-coder                       $0.070 / $0.270
+//   z-ai/glm-4.7-flash                     $0.061 / $0.400    <- dearest output on the ladder
+//
+// All five rungs verified ZDR-eligible 2026-07-22 (see the provider block below).
+// A new rung MUST be checked against `?zdr=true` before it lands here, or the
+// privacy gate will refuse it at call time.
 const LADDERS = {
-  bulk_summarize:        ['openai/gpt-oss-120b', 'deepseek/deepseek-v4-flash'],       // $0.04/$0.17
-  bulk_mechanical_edit:  ['qwen/qwen3-coder-30b-a3b-instruct', 'z-ai/glm-4.7-flash'], // $0.07/$0.27
-  log_triage:            ['openai/gpt-oss-120b', 'deepseek/deepseek-v4-flash'],       // $0.04/$0.17
-  boilerplate_generation:['qwen/qwen3-coder-30b-a3b-instruct', 'qwen/qwen3-coder'],   // $0.07/$0.27
+  bulk_summarize:        ['openai/gpt-oss-120b', 'deepseek/deepseek-v4-flash'],
+  bulk_mechanical_edit:  ['qwen/qwen3-coder-30b-a3b-instruct', 'z-ai/glm-4.7-flash'],
+  log_triage:            ['openai/gpt-oss-120b', 'deepseek/deepseek-v4-flash'],
+  boilerplate_generation:['qwen/qwen3-coder-30b-a3b-instruct', 'qwen/qwen3-coder'],
   structured_extraction: ['openai/gpt-oss-120b', 'qwen/qwen3-coder-30b-a3b-instruct'],
-  long_context:          ['deepseek/deepseek-v4-flash', 'z-ai/glm-4.7-flash'],        // 1M / 200k ctx
+  long_context:          ['deepseek/deepseek-v4-flash', 'z-ai/glm-4.7-flash'],
 };
 
 // Below this, orchestration overhead beats the saving. Advisory, not a hard stop.
@@ -174,12 +193,31 @@ for (let i = 0; i < candidates.length; i++) {
       body: JSON.stringify({
         model: rungModel,
         messages: [{ role: 'user', content: body }],
-        // ZERO-DATA-RETENTION IS MANDATORY on this path (ruled 2026-07-19). Auto can
-        // land a prompt at ANY catalog provider under varying retention terms, so the
-        // fix is at the mechanism, not the data. `data_collection: 'deny'` restricts
-        // routing to providers that do not train on or retain prompts. A provider
-        // that cannot honour it simply does not receive this traffic.
-        provider: { data_collection: 'deny' },
+        // ZERO-DATA-RETENTION IS MANDATORY on this path (ruled 2026-07-19, hardened
+        // 2026-07-22). Auto can land a prompt at ANY catalog provider under varying
+        // retention terms, so the fix is at the mechanism, not the data. A provider
+        // that cannot honour these terms simply does not receive this traffic.
+        //
+        // SEND BOTH FLAGS. OpenRouter documents these as two SEPARATE provider-routing
+        // controls, and neither is documented as subsuming the other:
+        //   data_collection: 'deny'  excludes providers that may store or train on prompts
+        //   zdr: true                restricts routing to zero-data-retention endpoints
+        // Non-retention and zero-retention are different guarantees: a provider can
+        // decline to train on a prompt while still holding it transiently for abuse
+        // monitoring. Sending only `data_collection` asserted a stronger property than
+        // the flag actually bought. The ZDR-filtered catalog is strictly smaller (222 of
+        // 342 models on 2026-07-22), which is what makes `zdr` the tighter control.
+        //
+        // Verified 2026-07-22: all five ladder rungs pass `?zdr=true`, so this narrows
+        // nothing in practice. Re-check after any rung change.
+        // https://openrouter.ai/docs/features/provider-routing
+        //
+        // `sort: 'throughput'` added 2026-07-22 after measuring a 12x latency
+        // spread WITHIN a single model, by provider alone: gpt-oss-120b served an
+        // identical 15.6 KB payload in 12.8s on DekaLLM and 1.0s on SambaNova.
+        // Pure speed win with no privacy tradeoff, because it only REORDERS the
+        // providers that already survived the two retention filters above.
+        provider: { data_collection: 'deny', zdr: true, sort: 'throughput' },
       }),
     });
   } catch (e) {
