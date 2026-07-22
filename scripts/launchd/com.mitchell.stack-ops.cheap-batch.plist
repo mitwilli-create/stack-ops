@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  cheap-batch: route recurring bulk toil to the open-weight tier, unattended.
+
+  SHIPS DOUBLE-DISABLED, matching the career-ops convention for every unattended
+  job that spends money:
+    1. Disabled=true below, and
+    2. the CHEAP_BATCH_ENABLED kill switch, which this plist deliberately does
+       NOT set. The --scheduled flag makes the script a 0-exit no-op without it.
+  Both gates must be lifted by hand. Verified 2026-07-22: with the switch unset,
+  a --scheduled --apply run exits 0 having called nothing.
+
+  Arm only after a live verification:
+    node scripts/cheap-batch.mjs                 # DRY, calls nothing
+    node scripts/cheap-batch.mjs --apply         # one real run, check the output
+    # then add CHEAP_BATCH_ENABLED=true to the environment, and:
+    launchctl enable gui/$UID/com.mitchell.stack-ops.cheap-batch
+
+  Note: `launchctl disable` persists across bootstraps. If a bootstrap returns
+  "Input/output error" with a valid plist, check `launchctl print-disabled`.
+
+  Runs 04:00 PT daily, deliberately after career-ops' 03:00 Sunday drain so the
+  two never contend for the same logs.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.mitchell.stack-ops.cheap-batch</string>
+
+  <key>Disabled</key>
+  <true/>
+
+  <!--
+    Invoked through a login shell on purpose. node lives under nvm here
+    (~/.nvm/versions/node/<ver>/bin/node), not /usr/local/bin/node, and launchd
+    jobs get a minimal PATH that contains neither. Hardcoding the nvm path would
+    work today and break silently on the next node upgrade, at 04:00, with the
+    only evidence in a log nobody reads. `zsh -lc` resolves node the same way an
+    interactive shell does, so a version bump is a non-event.
+  -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>exec node /Users/mitchellwilliams/Documents/stack-ops/scripts/cheap-batch.mjs --apply --scheduled</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/mitchellwilliams/Documents/stack-ops</string>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>4</integer>
+    <key>Minute</key><integer>0</integer>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/Users/mitchellwilliams/Library/Logs/stack-ops/cheap-batch.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/mitchellwilliams/Library/Logs/stack-ops/cheap-batch.err</string>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

@@ -238,3 +238,122 @@ test('triagePr: never assigns three reviewers to one PR', () => {
   const r = triagePr({ additions: 5000, deletions: 3000, filesChanged: 90, repoTier: REPO_TIER.PRODUCTION_CRITICAL, riskLabels: ['security', 'migration'] });
   assert.ok(r.reviewers.length <= 2, `got ${r.reviewers.length} reviewers`);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Path-context narrowing, ruled 2026-07-22. These tests exist because the gate
+// was measured refusing 33% of this repo's own public docs. Each PASS case below
+// is a real string from a real file that was really refused before the change,
+// so these can go red: revert the narrowing and the four PASS cases fail.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('gate: the WORD "credentials" in prose routes cheap (was a false block)', () => {
+  const r = classify({ text: 'The MCP layer never stores credentials in the config file.' }, cfg);
+  assert.equal(r.route, ROUTE.AUTO, JSON.stringify(r.reasons));
+});
+
+test('gate: a FILE named credentials is still gated', () => {
+  const r = classify({ text: 'x', paths: ['~/.aws/credentials'] }, cfg);
+  assert.equal(r.route, ROUTE.ANTHROPIC_DIRECT);
+  assert.equal(r.reasons[0].signal, SIGNAL.PRIVATE_PATH);
+});
+
+// RESIDUAL OVER-FILTER, known and accepted 2026-07-22. Path-context narrowing
+// cannot separate "documenting a path" from "pasting a path": both produce the
+// identical token. So a doc that spells out ~/.secrets/api-keys.env still gates,
+// and docs/memory-mem0.md in this repo is still refused. Closing this would mean
+// applying path patterns to the paths array ONLY (the stronger option Mitchell
+// considered and did not pick), which would also stop catching a genuinely
+// pasted private path. Asserting the real behavior, not the desired one: a test
+// that lied here would be exactly the green-check-that-cannot-go-red this repo
+// bans. Revisit only with a new ruling.
+test('gate: a spelled-out private path in a doc still gates (known residual)', () => {
+  const r = classify({ text: 'Add `MEM0_API_KEY` to `~/.secrets/api-keys.env` (value-blind).' }, cfg);
+  assert.equal(r.route, ROUTE.ANTHROPIC_DIRECT);
+  assert.equal(r.reasons[0].signal, SIGNAL.PRIVATE_PATH);
+});
+
+test('gate: a PASTED private path in text is still gated', () => {
+  const r = classify({ text: 'cat ~/.secrets/api-keys.env and tell me what is wrong' }, cfg);
+  assert.equal(r.route, ROUTE.ANTHROPIC_DIRECT);
+});
+
+test('gate: DESCRIBING a secret-scan gate routes cheap (was a false block)', () => {
+  const r = classify({ text: 'See private/HANDOVER.md for the public-repo publishing gate and its secret-scan step.' }, cfg);
+  assert.equal(r.route, ROUTE.AUTO, JSON.stringify(r.reasons));
+});
+
+test('gate: PERFORMING a secret scan is still gated', () => {
+  const r = classify({ text: 'run a secret-scan across the full tree before we push' }, cfg);
+  assert.equal(r.route, ROUTE.ANTHROPIC_DIRECT);
+  assert.equal(r.reasons[0].signal, SIGNAL.INFRA);
+});
+
+test('gate: narrowing did NOT weaken the credential scanner', () => {
+  // The whole safety argument for the narrowing is that signal 1 still catches a
+  // real key even in a doc the path signal now lets through. Prove it.
+  const r = classify({ text: 'Add MEM0_API_KEY to ~/.secrets/api-keys.env, the value is sk-proj-AAAABBBBCCCCDDDDEEEE1234' }, cfg);
+  assert.equal(r.route, ROUTE.ANTHROPIC_DIRECT);
+  assert.equal(r.reasons[0].signal, SIGNAL.SECRET);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CodeRabbit review round 1, PR #3 (2026-07-22). Every case below is a real
+// finding from that review, not hypothetical coverage.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('gate: Windows-separator private path is caught (was a bypass)', () => {
+  // Backslash tokens were collected but never normalized, while the patterns
+  // anchor on `/`. So this routed externally. Found by review, not by the corpus:
+  // every planted case used POSIX paths.
+  // Isolating the behavior under test took three attempts, which is the point of
+  // the can-fail rule. `id_rsa` matches a bare-filename pattern; `api-keys.env`
+  // matches a separator-independent one. Both passed with the normalizer DELETED,
+  // i.e. green for the wrong reason. `.ssh\\config` matches only via the
+  // `(?:^|\/)\.ssh(?:\/|$)` anchor, so it goes red without normalization.
+  const r = classify({ text: 'open C:\\Users\\me\\.ssh\\config and check it' }, cfg);
+  assert.equal(r.route, ROUTE.ANTHROPIC_DIRECT);
+});
+
+test('gate: Windows-separator path in the paths ARRAY is caught too', () => {
+  const r = classify({ text: 'x', paths: ['C:\\Users\\me\\.aws\\credentials'] }, cfg);
+  assert.equal(r.route, ROUTE.ANTHROPIC_DIRECT);
+  assert.equal(r.reasons[0].signal, SIGNAL.PRIVATE_PATH);
+});
+
+test('gate: DESCRIBING a secrets rotation policy routes cheap', () => {
+  // The action-verb rule was applied to secret-scan but not to
+  // rotation/hardening, so this still blocked, contradicting the narrowing.
+  const r = classify({ text: 'Our secrets rotation policy is documented in the handbook.' }, cfg);
+  assert.equal(r.route, ROUTE.AUTO, JSON.stringify(r.reasons));
+});
+
+test('gate: PERFORMING a secrets rotation is still gated', () => {
+  const r = classify({ text: 'run the secrets rotation for the council server now' }, cfg);
+  assert.equal(r.route, ROUTE.ANTHROPIC_DIRECT);
+  assert.equal(r.reasons[0].signal, SIGNAL.INFRA);
+});
+
+// ── CodeRabbit round 2, PR #3 (2026-07-22) ──────────────────────────────────
+
+test('gate: an allowlisted path does NOT exempt a private path beside it', () => {
+  // The severe direction. Before the per-candidate fix this returned AUTO with an
+  // EMPTY reasons array: a credential path left the machine and the decision
+  // looked clean in the log.
+  const r = classify({ text: 'summarize these', paths: ['stack-ops/docs/x.md', '~/.aws/credentials'] }, cfg);
+  assert.equal(r.route, ROUTE.ANTHROPIC_DIRECT, `leaked: ${JSON.stringify(r.reasons)}`);
+  assert.equal(r.reasons[0].signal, SIGNAL.PRIVATE_PATH);
+});
+
+test('gate: an allowlisted path alone still routes cheap', () => {
+  // Guard the other direction, so the fix above is a narrowing of the exemption
+  // and not a removal of it.
+  const r = classify({ text: 'summarize this', paths: ['stack-ops/docs/x.md'] }, cfg);
+  assert.equal(r.route, ROUTE.AUTO, JSON.stringify(r.reasons));
+});
+
+test('gate: the allowlist now applies to paths found in TEXT too', () => {
+  // Mirror-image defect: text-extracted paths were never allowlist-checked, so an
+  // allowlisted path mentioned in prose could never be exempted.
+  const r = classify({ text: 'check stack-ops/docs/mcp-layer.md for the wording' }, cfg);
+  assert.equal(r.route, ROUTE.AUTO, JSON.stringify(r.reasons));
+});

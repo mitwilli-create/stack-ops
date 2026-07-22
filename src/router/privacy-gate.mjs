@@ -120,7 +120,12 @@ const DEFAULT_PRIVATE_PATH_PATTERNS = [
   /(?:^|\/)\.ssh(?:\/|$)/,
   /(?:^|[/\\])\.env(?:\.[\w-]+)?$/,
   /(?:^|\/)\.(?:zshrc|zshenv|zprofile|bash_profile|bashrc|profile)$/, // rc files that source the vault
-  /\b(?:credentials|id_rsa|id_ed25519|service-account[\w-]*\.json)\b/,
+  // `credentials` as a bare word was REMOVED 2026-07-22 by ruling. It is an
+  // ordinary English noun and matched any prose using it, while adding nothing:
+  // a file actually named `credentials` still matches as a path token, and a
+  // real key inside it is caught by the credential scanner regardless.
+  /\b(?:id_rsa|id_ed25519|service-account[\w-]*\.json)\b/,
+  /(?:^|\/)credentials(?:\.\w+)?$/,   // a FILE named credentials, not the word
   /\bapi-keys?\.env\b/,
 ];
 
@@ -129,7 +134,18 @@ const DEFAULT_PRIVATE_PATH_PATTERNS = [
 // tend to quote key names and vault layout in-line.
 const DEFAULT_INFRA_PATTERNS = [
   /\b(?:rotate|revoke|provision)\s+(?:the\s+)?(?:api\s+)?key\b/i,
-  /\bsecret[- ]scan\b|\bsecrets? (?:ops|operation|rotation|hardening)\b/i,
+  // NARROWED 2026-07-22 by ruling. The bare nouns `secret-scan` and `secrets
+  // ops` fired on Mitchell writing DOCUMENTATION about his own tooling: this
+  // repo's README was refused for describing its own publishing gate. The
+  // signal exists because PERFORMING secrets work quotes key names and vault
+  // layout inline, so it now requires an action verb, which is what separates
+  // doing the work from describing it.
+  /\b(?:run|running|perform|do|doing|execute|start)\s+(?:an?\s+|the\s+)?secret[- ]scan\b/i,
+  // Rotation/hardening needs the same action verb as secret-scan above. Without
+  // it, "the secrets rotation policy" in a doc still blocked, which contradicts
+  // the rule this narrowing was supposed to establish.
+  /\b(?:run|running|perform|do|doing|execute|start|begin|schedule)\s+(?:an?\s+|the\s+)?secrets? (?:rotation|hardening)\b/i,
+  /\brotate\s+(?:the\s+)?secrets?\b/i,
   /\bsecrets-launchd-setenv\b|\blaunchctl setenv\b/i,
   /\bvault\b.*\b(?:key|secret|token)\b/i,
 ];
@@ -183,6 +199,64 @@ export async function loadPrivateConfig() {
   } catch {
     return null; // absent in a public checkout, generic defaults are still safe
   }
+}
+
+/**
+ * Pull path-like tokens out of free text so private-path patterns can be applied
+ * to those tokens alone rather than to the surrounding prose (see the call site
+ * in classify() for why). A token counts as path-like when it is an absolute,
+ * home-relative or dot-relative path, or when it contains a slash with no
+ * whitespace. Returned tokens keep a leading slash where one is implied by `~`
+ * or `./`, because the patterns anchor on `(?:^|\/)`.
+ *
+ * Deliberately NOT a path parser. It over-collects (a URL is path-like, a bare
+ * `a/b` is path-like) because over-collecting costs one request routed to the
+ * trusted provider, while under-collecting would let a genuinely pasted private
+ * path through. Asymmetric, so it errs toward collecting.
+ *
+ * @param {string} str
+ * @returns {string[]}
+ */
+/**
+ * Normalize a path-like token to the forward-slash form the patterns expect.
+ *
+ * Backslash separators were being COLLECTED but never normalized, while the
+ * patterns anchor on `(?:^|\/)`. So `C:\Users\me\.aws\credentials` was gathered
+ * as a token and then matched nothing, routing externally. Found by review, not
+ * by the corpus: every planted case used POSIX paths, which is exactly the blind
+ * spot a corpus drawn from one platform produces.
+ *
+ * @param {string} token
+ * @returns {string}
+ */
+function normalizePathToken(token) {
+  return token
+    .replace(/\\/g, '/')            // Windows separators first, so the anchors work
+    .replace(/^~/, '/home')
+    .replace(/^\.\.?\//, '/');
+}
+
+export function extractPathLikeTokens(str) {
+  if (typeof str !== 'string' || !str) return [];
+  const out = [];
+  // Candidate = a run of non-whitespace containing a slash, or a bare dotfile
+  // name. Strip common surrounding punctuation (quotes, backticks, parens,
+  // trailing sentence punctuation) so `to \`~/.secrets/api-keys.env\`.` yields
+  // the path and not the decoration.
+  for (const raw of str.split(/\s+/)) {
+    const tok = raw.replace(/^[`'"(\[{<]+/, '').replace(/[`'")\]}>,;:.!?]+$/, '');
+    if (!tok) continue;
+    if (tok.includes('/') || tok.includes('\\')) {
+      // Normalize `~/x` and `./x` so the `(?:^|\/)` anchors behave the same way
+      // they do on a real absolute path.
+      out.push(normalizePathToken(tok));
+      continue;
+    }
+    // A bare dotfile with no slash is still a filename the path patterns care
+    // about (e.g. `.env`, `.zshrc`), but only when it is the whole token.
+    if (/^\.[\w.-]+$/.test(tok)) out.push('/' + tok);
+  }
+  return out;
 }
 
 function anyMatch(patterns, str) {
@@ -239,10 +313,51 @@ export function classify(input, config = buildConfig()) {
   // 4. Private paths, in the referenced paths OR mentioned in the text, unless
   //    an allowlist entry exempts the path. Secret/PII/employer content above is
   //    NEVER exempted by the allowlist.
-  const pathBlob = rawPaths.join('\n');
-  const allowlisted = anyMatch(config.allowlist, pathBlob);
-  const pathHit = anyMatch(config.privatePathPatterns, pathBlob) || anyMatch(config.privatePathPatterns, text);
-  if (pathHit && !allowlisted) reasons.push({ signal: SIGNAL.PRIVATE_PATH, detail: `matched ${pathHit.source.slice(0, 48)}` });
+  // Normalize rawPaths too: a caller can pass a Windows path in the paths array
+  // just as easily as pasting one in text, and the same anchors apply.
+  //
+  // PER-CANDIDATE, not per-request (fixed 2026-07-22, CodeRabbit round 2). The
+  // allowlist used to be evaluated against the JOINED blob, so ONE allowlisted
+  // path exempted every other path in the same request. Reproduced:
+  //   paths: ['stack-ops/docs/x.md', '~/.aws/credentials']  ->  route AUTO,
+  // with an EMPTY reasons array, so a credential path left the machine and the
+  // decision looked clean in the log. That is the severe direction (under-filter).
+  // The mirror-image defect was also present: paths extracted from TEXT were
+  // never checked against the allowlist at all, so an allowlisted path mentioned
+  // in prose could never be exempted.
+  //
+  // Both come from the same mistake, treating a set of paths as one string. Each
+  // candidate is now judged on its own: a private match is suppressed only when
+  // THAT candidate is itself allowlisted.
+  const candidates = [
+    ...rawPaths.map(normalizePathToken),
+    ...extractPathLikeTokens(text),
+  ];
+  // NARROWED 2026-07-22 by ruling (see research/gate-triage-audit-2026-07-22.md).
+  // This used to match private-path patterns against the WHOLE of `text`, which
+  // made the gate fire on ordinary prose: writing the word "credentials" in a
+  // sentence, or documenting that a key lives in ~/.secrets/api-keys.env, was
+  // enough to refuse. Measured cost: 2 of 6 of this repo's own public docs were
+  // refused, a 33% false-block rate on benign content, and that over-filter was
+  // the single largest brake on cheap-tier adoption.
+  //
+  // The fix is scope, not strength: path patterns now run against PATH-LIKE
+  // TOKENS extracted from the text, not the prose around them. A real pasted
+  // path still matches (it is still a path-like token); a sentence that merely
+  // mentions one no longer does. The credential SCANNER is untouched and remains
+  // the load-bearing control: if that doc contained an actual key rather than a
+  // reference to where a key lives, signal 1 above still catches it.
+  let pathHit = null;
+  for (const cand of candidates) {
+    const hit = anyMatch(config.privatePathPatterns, cand);
+    if (!hit) continue;
+    // Allowlist THIS candidate only. Never exempts secret/PII/employer content,
+    // which are separate signals evaluated above and are not reachable from here.
+    if (anyMatch(config.allowlist, cand)) continue;
+    pathHit = hit;
+    break;
+  }
+  if (pathHit) reasons.push({ signal: SIGNAL.PRIVATE_PATH, detail: `matched ${pathHit.source.slice(0, 48)}` });
 
   // 5. Infra / secrets operations. Denies for credential-exposure reasons, not
   //    privacy, this work quotes key names and vault layout inline.

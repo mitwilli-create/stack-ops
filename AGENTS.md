@@ -61,6 +61,22 @@ planted bad input.
 | Tests | `npm test` |
 | Prose gate | `vale --glob='!node_modules/**' .` then the grep sweep in `scripts/` |
 | Cheap delegation | `cheap --task <archetype> --files … "instruction"` |
+| Archive a report to NotebookLM | `node scripts/publish-report-to-notebooklm.mjs --report <path> --notebook "Council Reports"` |
+
+## Research archive
+
+Council and dealbreaker passes auto-archive to NotebookLM via
+`scripts/publish-report-to-notebooklm.mjs`, wired as a mandatory final step in both agents (2026-07-22).
+Raw council reports route to the "Council Reports" notebook and adjudicated ones to "Dealbreaker Reports";
+keeping them apart preserves the distinction between what was claimed and what survived verification.
+
+Routing is by notebook **title**, never a hardcoded id, so nothing account-specific lives in this repo and a
+deleted notebook is recreated rather than erroring. Auth is a browser session written by `notebooklm login`,
+never a key.
+
+The step **soft-fails by design** and exits 0 on failure, so a zero exit code is not evidence of success:
+read the stdout for `published:`. It rides `notebooklm-py`, an unofficial client on undocumented Google
+endpoints, and an archival side-channel must never be able to fail a research pass that already cost money.
 
 <!-- BEGIN STANDING-RULES (Mitchell global, installed 2026-07-18) -->
 ## Standing rules (global)
