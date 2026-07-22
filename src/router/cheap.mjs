@@ -289,8 +289,81 @@ for (let i = 0; i < candidates.length; i++) {
   process.exit(0);
 }
 
-// Every rung failed. Point back to the trusted path, same as the refusal/timeout
-// messages above; the exit code carries the last rung's failure kind.
-console.error(`cheap: all ${candidates.length} model(s) for this task failed. ` +
-  `Do this one inline in Claude Code (it is already on the trusted path).`);
-process.exit(lastExit);
+// Every cheap rung failed. RULED 2026-07-22: escalate to a frontier model rather
+// than refusing, because a stalled overnight batch costs Mitchell more than the
+// escalation does.
+//
+// This REVERSES the original posture, and the original reasoning was not wrong:
+// a silent frontier call hides cost, which is the exact failure this command
+// exists to prevent. So the ruling is conditional on the escalation being
+// IMPOSSIBLE TO MISS. That is what the banner and the distinct `outcome:
+// "escalated"` row below are for, and why the row carries `after_rungs` naming
+// every cheap model that failed first. Do not quiet either one.
+//
+// SCOPE: this escalates only on RUNG FAILURE (upstream error, timeout, empty or
+// unparseable completion). It never escalates a PRIVACY-GATE refusal. A gate
+// refusal is a security decision about where data may go, and auto-escalating it
+// would route flagged content onward instead of stopping, which is the one thing
+// the gate exists to prevent. That path still exits 3 above and always will.
+const ESCALATION_MODEL = process.env.CHEAP_ESCALATION_MODEL || 'anthropic/claude-sonnet-5';
+
+if (process.env.CHEAP_NO_ESCALATE === '1') {
+  console.error(`cheap: all ${candidates.length} model(s) for this task failed, and escalation is disabled. ` +
+    `Do this one inline in Claude Code (it is already on the trusted path).`);
+  process.exit(lastExit);
+}
+
+console.error(`\n${'='.repeat(72)}\n` +
+  `⚠️  ESCALATING TO A FRONTIER MODEL. This call is NOT cheap.\n` +
+  `    All ${candidates.length} cheap rung(s) failed: ${candidates.join(', ')}\n` +
+  `    Now calling: ${ESCALATION_MODEL}\n` +
+  `    Suppress with CHEAP_NO_ESCALATE=1 to refuse instead.\n` +
+  `${'='.repeat(72)}\n`);
+
+const escStarted = Date.now();
+try {
+  const res = await fetch(OPENROUTER_URL, {
+    method: 'POST',
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+    headers: {
+      'Authorization': `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      'X-Title': 'stack-ops cheap (escalated)',
+    },
+    // Same retention terms as the cheap path. Escalating changes the price tier,
+    // never the privacy posture.
+    body: JSON.stringify({
+      model: ESCALATION_MODEL,
+      messages: [{ role: 'user', content: body }],
+      provider: { data_collection: 'deny', zdr: true },
+    }),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  const json = await res.json();
+  const text = json?.choices?.[0]?.message?.content ?? '';
+  if (!text.trim()) throw new Error('empty completion');
+
+  process.stdout.write(text.endsWith('\n') ? text : text + '\n');
+  logDecision({
+    ts: new Date().toISOString(),
+    outcome: 'escalated',                 // distinct from 'ok' ON PURPOSE, so a
+    task: args.task || null,              // spend audit can count these alone
+    requested: ESCALATION_MODEL,
+    served: json?.model ?? null,
+    provider: json?.provider ?? null,
+    usage: json?.usage ?? null,
+    after_rungs: candidates,              // which cheap models failed first
+    chars: body.length,
+    files: args.files.length,
+    ms: Date.now() - escStarted,
+  });
+  console.error(`cheap: escalation succeeded on ${ESCALATION_MODEL}, logged as outcome=escalated.`);
+  process.exit(0);
+} catch (e) {
+  console.error(`cheap: escalation to ${ESCALATION_MODEL} also failed, ${e.message}. ` +
+    `Do this one inline in Claude Code (it is already on the trusted path).`);
+  logDecision({ ts: new Date().toISOString(), outcome: 'escalation_failed', task: args.task || null,
+    requested: ESCALATION_MODEL, after_rungs: candidates, detail: e?.message ?? String(e),
+    chars: body.length, ms: Date.now() - escStarted });
+  process.exit(lastExit);
+}

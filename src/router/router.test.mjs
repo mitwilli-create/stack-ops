@@ -238,3 +238,60 @@ test('triagePr: never assigns three reviewers to one PR', () => {
   const r = triagePr({ additions: 5000, deletions: 3000, filesChanged: 90, repoTier: REPO_TIER.PRODUCTION_CRITICAL, riskLabels: ['security', 'migration'] });
   assert.ok(r.reviewers.length <= 2, `got ${r.reviewers.length} reviewers`);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Path-context narrowing, ruled 2026-07-22. These tests exist because the gate
+// was measured refusing 33% of this repo's own public docs. Each PASS case below
+// is a real string from a real file that was really refused before the change,
+// so these can go red: revert the narrowing and the four PASS cases fail.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('gate: the WORD "credentials" in prose routes cheap (was a false block)', () => {
+  const r = classify({ text: 'The MCP layer never stores credentials in the config file.' }, cfg);
+  assert.equal(r.route, ROUTE.AUTO, JSON.stringify(r.reasons));
+});
+
+test('gate: a FILE named credentials is still gated', () => {
+  const r = classify({ text: 'x', paths: ['~/.aws/credentials'] }, cfg);
+  assert.equal(r.route, ROUTE.ANTHROPIC_DIRECT);
+  assert.equal(r.reasons[0].signal, SIGNAL.PRIVATE_PATH);
+});
+
+// RESIDUAL OVER-FILTER, known and accepted 2026-07-22. Path-context narrowing
+// cannot separate "documenting a path" from "pasting a path": both produce the
+// identical token. So a doc that spells out ~/.secrets/api-keys.env still gates,
+// and docs/memory-mem0.md in this repo is still refused. Closing this would mean
+// applying path patterns to the paths array ONLY (the stronger option Mitchell
+// considered and did not pick), which would also stop catching a genuinely
+// pasted private path. Asserting the real behavior, not the desired one: a test
+// that lied here would be exactly the green-check-that-cannot-go-red this repo
+// bans. Revisit only with a new ruling.
+test('gate: a spelled-out private path in a doc still gates (known residual)', () => {
+  const r = classify({ text: 'Add `MEM0_API_KEY` to `~/.secrets/api-keys.env` (value-blind).' }, cfg);
+  assert.equal(r.route, ROUTE.ANTHROPIC_DIRECT);
+  assert.equal(r.reasons[0].signal, SIGNAL.PRIVATE_PATH);
+});
+
+test('gate: a PASTED private path in text is still gated', () => {
+  const r = classify({ text: 'cat ~/.secrets/api-keys.env and tell me what is wrong' }, cfg);
+  assert.equal(r.route, ROUTE.ANTHROPIC_DIRECT);
+});
+
+test('gate: DESCRIBING a secret-scan gate routes cheap (was a false block)', () => {
+  const r = classify({ text: 'See private/HANDOVER.md for the public-repo publishing gate and its secret-scan step.' }, cfg);
+  assert.equal(r.route, ROUTE.AUTO, JSON.stringify(r.reasons));
+});
+
+test('gate: PERFORMING a secret scan is still gated', () => {
+  const r = classify({ text: 'run a secret-scan across the full tree before we push' }, cfg);
+  assert.equal(r.route, ROUTE.ANTHROPIC_DIRECT);
+  assert.equal(r.reasons[0].signal, SIGNAL.INFRA);
+});
+
+test('gate: narrowing did NOT weaken the credential scanner', () => {
+  // The whole safety argument for the narrowing is that signal 1 still catches a
+  // real key even in a doc the path signal now lets through. Prove it.
+  const r = classify({ text: 'Add MEM0_API_KEY to ~/.secrets/api-keys.env, the value is sk-proj-AAAABBBBCCCCDDDDEEEE1234' }, cfg);
+  assert.equal(r.route, ROUTE.ANTHROPIC_DIRECT);
+  assert.equal(r.reasons[0].signal, SIGNAL.SECRET);
+});

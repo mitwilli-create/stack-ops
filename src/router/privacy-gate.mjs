@@ -120,7 +120,12 @@ const DEFAULT_PRIVATE_PATH_PATTERNS = [
   /(?:^|\/)\.ssh(?:\/|$)/,
   /(?:^|[/\\])\.env(?:\.[\w-]+)?$/,
   /(?:^|\/)\.(?:zshrc|zshenv|zprofile|bash_profile|bashrc|profile)$/, // rc files that source the vault
-  /\b(?:credentials|id_rsa|id_ed25519|service-account[\w-]*\.json)\b/,
+  // `credentials` as a bare word was REMOVED 2026-07-22 by ruling. It is an
+  // ordinary English noun and matched any prose using it, while adding nothing:
+  // a file actually named `credentials` still matches as a path token, and a
+  // real key inside it is caught by the credential scanner regardless.
+  /\b(?:id_rsa|id_ed25519|service-account[\w-]*\.json)\b/,
+  /(?:^|\/)credentials(?:\.\w+)?$/,   // a FILE named credentials, not the word
   /\bapi-keys?\.env\b/,
 ];
 
@@ -129,7 +134,14 @@ const DEFAULT_PRIVATE_PATH_PATTERNS = [
 // tend to quote key names and vault layout in-line.
 const DEFAULT_INFRA_PATTERNS = [
   /\b(?:rotate|revoke|provision)\s+(?:the\s+)?(?:api\s+)?key\b/i,
-  /\bsecret[- ]scan\b|\bsecrets? (?:ops|operation|rotation|hardening)\b/i,
+  // NARROWED 2026-07-22 by ruling. The bare nouns `secret-scan` and `secrets
+  // ops` fired on Mitchell writing DOCUMENTATION about his own tooling: this
+  // repo's README was refused for describing its own publishing gate. The
+  // signal exists because PERFORMING secrets work quotes key names and vault
+  // layout inline, so it now requires an action verb, which is what separates
+  // doing the work from describing it.
+  /\b(?:run|running|perform|do|doing|execute|start)\s+(?:an?\s+|the\s+)?secret[- ]scan\b/i,
+  /\bsecrets? (?:rotation|hardening)\b/i,
   /\bsecrets-launchd-setenv\b|\blaunchctl setenv\b/i,
   /\bvault\b.*\b(?:key|secret|token)\b/i,
 ];
@@ -183,6 +195,45 @@ export async function loadPrivateConfig() {
   } catch {
     return null; // absent in a public checkout, generic defaults are still safe
   }
+}
+
+/**
+ * Pull path-like tokens out of free text so private-path patterns can be applied
+ * to those tokens alone rather than to the surrounding prose (see the call site
+ * in classify() for why). A token counts as path-like when it is an absolute,
+ * home-relative or dot-relative path, or when it contains a slash with no
+ * whitespace. Returned tokens keep a leading slash where one is implied by `~`
+ * or `./`, because the patterns anchor on `(?:^|\/)`.
+ *
+ * Deliberately NOT a path parser. It over-collects (a URL is path-like, a bare
+ * `a/b` is path-like) because over-collecting costs one request routed to the
+ * trusted provider, while under-collecting would let a genuinely pasted private
+ * path through. Asymmetric, so it errs toward collecting.
+ *
+ * @param {string} str
+ * @returns {string[]}
+ */
+export function extractPathLikeTokens(str) {
+  if (typeof str !== 'string' || !str) return [];
+  const out = [];
+  // Candidate = a run of non-whitespace containing a slash, or a bare dotfile
+  // name. Strip common surrounding punctuation (quotes, backticks, parens,
+  // trailing sentence punctuation) so `to \`~/.secrets/api-keys.env\`.` yields
+  // the path and not the decoration.
+  for (const raw of str.split(/\s+/)) {
+    const tok = raw.replace(/^[`'"(\[{<]+/, '').replace(/[`'")\]}>,;:.!?]+$/, '');
+    if (!tok) continue;
+    if (tok.includes('/') || tok.includes('\\')) {
+      // Normalize `~/x` and `./x` so the `(?:^|\/)` anchors behave the same way
+      // they do on a real absolute path.
+      out.push(tok.replace(/^~/, '/home').replace(/^\.\.?\//, '/'));
+      continue;
+    }
+    // A bare dotfile with no slash is still a filename the path patterns care
+    // about (e.g. `.env`, `.zshrc`), but only when it is the whole token.
+    if (/^\.[\w.-]+$/.test(tok)) out.push('/' + tok);
+  }
+  return out;
 }
 
 function anyMatch(patterns, str) {
@@ -241,7 +292,22 @@ export function classify(input, config = buildConfig()) {
   //    NEVER exempted by the allowlist.
   const pathBlob = rawPaths.join('\n');
   const allowlisted = anyMatch(config.allowlist, pathBlob);
-  const pathHit = anyMatch(config.privatePathPatterns, pathBlob) || anyMatch(config.privatePathPatterns, text);
+  // NARROWED 2026-07-22 by ruling (see research/gate-triage-audit-2026-07-22.md).
+  // This used to match private-path patterns against the WHOLE of `text`, which
+  // made the gate fire on ordinary prose: writing the word "credentials" in a
+  // sentence, or documenting that a key lives in ~/.secrets/api-keys.env, was
+  // enough to refuse. Measured cost: 2 of 6 of this repo's own public docs were
+  // refused, a 33% false-block rate on benign content, and that over-filter was
+  // the single largest brake on cheap-tier adoption.
+  //
+  // The fix is scope, not strength: path patterns now run against PATH-LIKE
+  // TOKENS extracted from the text, not the prose around them. A real pasted
+  // path still matches (it is still a path-like token); a sentence that merely
+  // mentions one no longer does. The credential SCANNER is untouched and remains
+  // the load-bearing control: if that doc contained an actual key rather than a
+  // reference to where a key lives, signal 1 above still catches it.
+  const pathHit = anyMatch(config.privatePathPatterns, pathBlob)
+    || anyMatch(config.privatePathPatterns, extractPathLikeTokens(text).join('\n'));
   if (pathHit && !allowlisted) reasons.push({ signal: SIGNAL.PRIVATE_PATH, detail: `matched ${pathHit.source.slice(0, 48)}` });
 
   // 5. Infra / secrets operations. Denies for credential-exposure reasons, not
