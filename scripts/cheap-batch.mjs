@@ -30,6 +30,35 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
+// The gate is imported, not reimplemented. Re-typing its patterns here would
+// invent bugs that do not exist and would drift the moment the gate changes.
+import { classify, buildConfig, loadPrivateConfig, extractPathLikeTokens, ROUTE, SIGNAL } from '../src/router/privacy-gate.mjs';
+
+const GATE_CFG = buildConfig(await loadPrivateConfig());
+
+/**
+ * Replace private-path TOKENS with a placeholder, leaving the surrounding log
+ * line intact. Only tokens that actually match a private-path pattern are
+ * touched, so ordinary paths in a stack trace survive and stay useful for triage.
+ *
+ * This handles path REFERENCES only. A file containing a credential VALUE is
+ * excluded upstream and never reaches this function; redacting a secret and
+ * sending the remainder is not a thing this script does.
+ */
+function redactPathTokens(text, cfg) {
+  let out = text;
+  for (const tok of new Set(extractPathLikeTokens(text))) {
+    const isPrivate = cfg.privatePathPatterns.some(re => { re.lastIndex = 0; return re.test(tok); });
+    if (!isPrivate) continue;
+    // extractPathLikeTokens normalizes (~ -> /home, \ -> /), so match on the
+    // recognizable tail rather than the normalized form, which may not appear
+    // literally in the source text.
+    const tail = tok.split('/').filter(Boolean).slice(-2).join('/');
+    if (!tail) continue;
+    out = out.split(tail).join('<redacted-path>');
+  }
+  return out;
+}
 
 const HOME = homedir();
 const LEDGER = process.env.CHEAP_BATCH_LEDGER || join(HOME, '.claude', 'logs', 'cheap-batch-ledger.jsonl');
@@ -95,21 +124,81 @@ const JOBS = [
       // logs: the cap was real and enforced and bought nothing, because nothing
       // checked the sum. Caught by the dry run before it could cost anything,
       // which is the entire reason this script is DRY by default.
-      let text = '';
-      for (const dir of candidates) {
-        for (const f of safeList(dir).filter(f => f.endsWith('.log') || f.endsWith('.err'))) {
-          if (Buffer.byteLength(text) >= MAX_BYTES) break;
-          const p = join(dir, f);
+      //
+      // PER-FILE ADMISSION (2026-07-22). Concatenating first meant ONE poisoned
+      // file gated the whole job, and measured, 41 of 45 local logs tripped the
+      // gate, so log_triage could never route at all. Each file is now judged on
+      // its own and the survivors are joined.
+      //
+      // Two DIFFERENT dispositions, and the difference is the whole design:
+      //
+      //   PATH REFERENCES are redacted. Nearly every hit was a line like
+      //   "loaded /Users/x/.secrets/api-keys.env:35", which names WHERE a key
+      //   lives and contains no key. Replacing the token with <path> is a local,
+      //   deterministic DLP pass and loses nothing a log triage needs.
+      //
+      //   CREDENTIAL / PII / EMPLOYER hits DISQUALIFY the file outright. It is
+      //   never redacted and re-sent. Three local logs really do contain live
+      //   secret VALUES, and stripping a secret so the remainder can be sent is
+      //   the sanitization paradox: you cannot ask a third party to handle
+      //   material it was prohibited from receiving, and a near-miss redaction
+      //   leaks. Those files stay off the cheap path permanently.
+      //
+      // The gate is re-run on the REDACTED text and is still authoritative: if a
+      // file passes here but the gate refuses the assembled body, the job
+      // refuses. This adds a filter in front of the gate; it never bypasses it.
+      const parts = [];
+      let excludedSecret = 0, excludedOther = 0, redacted = 0, bytes = 0;
+      // NEWEST FIRST. `ls` returns alphabetical order, so with a byte cap the job
+      // always triaged the same alphabetical prefix and never reached the rest.
+      // That made the admission logic look effective when it was really the cap
+      // doing the filtering by luck: the logs that DO carry credential values sort
+      // late and were never examined. Recency is also simply what triage wants.
+      const files = candidates.flatMap(dir =>
+        safeList(dir)
+          .filter(f => f.endsWith('.log') || f.endsWith('.err'))
+          .map(f => join(dir, f)))
+        .map(p => { try { return { p, mtime: statSync(p).mtimeMs, size: statSync(p).size }; } catch { return null; } })
+        .filter(Boolean)
+        .sort((a, b) => b.mtime - a.mtime);
+
+      for (const { p, size } of files) {
+        {
+          if (bytes >= MAX_BYTES) break;
+          const f = p.split('/').pop();
+          let raw;
           try {
-            if (statSync(p).size > MAX_BYTES) continue;
-            const room = MAX_BYTES - Buffer.byteLength(text);
-            // Tail, not head: the recent end of a log is where the failures are.
-            text += `\n===== ${f} =====\n` + readFileSync(p, 'utf8').slice(-Math.min(80_000, room));
-          } catch { /* unreadable log is not a failure */ }
+            if (size > MAX_BYTES) continue;
+            raw = readFileSync(p, 'utf8').slice(-80_000);   // tail: failures live at the end
+          } catch { continue; }
+          if (!raw.trim()) continue;
+
+          const before = classify({ text: raw }, GATE_CFG);
+          const signals = new Set(before.reasons.map(r => r.signal));
+          if (signals.has(SIGNAL.SECRET) || signals.has(SIGNAL.PII) || signals.has(SIGNAL.EMPLOYER)) {
+            excludedSecret++;
+            continue;                                       // disqualified, never redacted
+          }
+
+          let body = raw;
+          if (signals.has(SIGNAL.PRIVATE_PATH)) {
+            body = redactPathTokens(raw, GATE_CFG);
+            redacted++;
+          }
+          // Re-judge after redaction. A file that still trips anything is dropped
+          // rather than argued with.
+          if (classify({ text: body }, GATE_CFG).route !== ROUTE.AUTO) { excludedOther++; continue; }
+
+          const room = MAX_BYTES - bytes;
+          const chunk = `\n===== ${f} =====\n` + body.slice(0, room);
+          parts.push(chunk);
+          bytes += Buffer.byteLength(chunk);
         }
       }
-      if (Buffer.byteLength(text) > MAX_BYTES) text = text.slice(-MAX_BYTES);
-      return text.trim() ? { text, label: 'logs' } : null;
+      if (!parts.length) return null;
+      console.log(`        (logs: ${parts.length} admitted, ${redacted} path-redacted, ` +
+        `${excludedSecret} excluded for credential/PII/employer content, ${excludedOther} excluded post-redaction)`);
+      return { text: parts.join('\n'), label: `logs (${parts.length} files)` };
     },
   },
   {
@@ -171,6 +260,15 @@ for (const job of selected) {
     continue;
   }
   const bytes = Buffer.byteLength(input.text);
+  if (args.includes('--dump-body')) {
+    // Verification aid: write exactly what WOULD be sent, so the assembled body
+    // can be scanned independently before any run. Never used in normal operation.
+    mkdirSync(OUT_DIR, { recursive: true });
+    const dump = join(OUT_DIR, `DUMP-${job.name}.txt`);
+    writeFileSync(dump, input.text);
+    console.log(`  DUMP  ${job.name.padEnd(18)} -> ${dump}`);
+    continue;
+  }
   if (!apply) {
     console.log(`  PLAN  ${job.name.padEnd(18)} task=${job.task.padEnd(22)} ${bytes.toLocaleString()} bytes from ${input.label}`);
     continue;
