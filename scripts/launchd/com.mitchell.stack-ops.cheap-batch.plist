@@ -57,11 +57,22 @@
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>exec node /Users/mitchellwilliams/Documents/stack-ops/scripts/cheap-batch.mjs --apply --scheduled</string>
+    <string>cd /Users/mitchellwilliams/Library/Logs/stack-ops &amp;&amp; exec node /Users/mitchellwilliams/Documents/stack-ops/scripts/cheap-batch.mjs --apply --scheduled</string>
   </array>
 
+  <!--
+    NOT ~/Documents. launchd is TCC-blocked from that folder, so pointing
+    WorkingDirectory there made every run die before reaching node with:
+      shell-init: error retrieving current directory: getcwd: cannot access
+      parent directories: Operation not permitted
+    Caught on the first armed run 2026-07-23. The shell also cds explicitly in
+    ProgramArguments, because launchd resolves WorkingDirectory before the shell
+    starts and a blocked path fails at both layers. node is still invoked by
+    absolute path into ~/Documents, which works: the restriction is on the
+    process CWD, not on reading the file.
+  -->
   <key>WorkingDirectory</key>
-  <string>/Users/mitchellwilliams/Documents/stack-ops</string>
+  <string>/Users/mitchellwilliams/Library/Logs/stack-ops</string>
 
   <key>StartCalendarInterval</key>
   <dict>
