@@ -8,7 +8,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdtempSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -158,10 +158,24 @@ test('buildDealbreakerPrompt embeds the report text and adjudication framing', (
   assert.match(p, /CLAIM: the sky is green\./);
 });
 
-test('loadReportText passes inline text through and reads a small file path', () => {
+test('loadReportText passes inline text through', () => {
   assert.equal(loadReportText('just some inline text'), 'just some inline text');
+});
+
+test('loadReportText reads a file ONLY within COUNCIL_REPORTS_DIR, and fails closed otherwise', () => {
   const dir = mkdtempSync(join(tmpdir(), 'db-report-'));
-  const p = join(dir, 'report.md');
-  writeFileSync(p, '# Report\nbody');
-  assert.equal(loadReportText(p), '# Report\nbody');
+  try {
+    writeFileSync(join(dir, 'report.md'), '# Report\nbody');
+    // Opted in + inside the root -> read (relative path resolved against the root).
+    assert.equal(loadReportText('report.md', { COUNCIL_REPORTS_DIR: dir }), '# Report\nbody');
+    // Same absolute path but NO opt-in -> fail closed, returned as text.
+    assert.equal(loadReportText(join(dir, 'report.md'), {}), join(dir, 'report.md'));
+    // Traversal escaping the root -> rejected, returned as text (not read).
+    assert.equal(
+      loadReportText('../../../../etc/passwd', { COUNCIL_REPORTS_DIR: dir }),
+      '../../../../etc/passwd',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

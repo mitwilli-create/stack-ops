@@ -35,6 +35,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { existsSync, readFileSync } from 'node:fs';
+import { resolve as resolvePath, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
 
@@ -188,11 +189,22 @@ export function buildDealbreakerPrompt(reportText) {
   );
 }
 
-/** Resolve run_dealbreaker's `report` arg: a small existing file path is read; anything else is text. */
-export function loadReportText(report) {
+/**
+ * Resolve run_dealbreaker's `report` arg to text. Inline text is returned as-is.
+ * A path is read ONLY when the operator has opted in by setting COUNCIL_REPORTS_DIR
+ * AND the resolved path is contained within that root. Fail-closed: with no
+ * COUNCIL_REPORTS_DIR set, NO file is ever read (everything is treated as text),
+ * and any path that escapes the root (traversal or absolute) is rejected. This
+ * keeps the MCP tool from being turned into an arbitrary-file-read surface.
+ */
+export function loadReportText(report, env = process.env) {
   const s = String(report ?? '');
-  if (s && !s.includes('\n') && s.length < 1024 && existsSync(s)) {
-    try { return readFileSync(s, 'utf8'); } catch { return s; }
+  const root = env.COUNCIL_REPORTS_DIR ? resolvePath(env.COUNCIL_REPORTS_DIR) : null;
+  if (root && s && !s.includes('\n') && s.length < 1024) {
+    const resolved = resolvePath(root, s);
+    if ((resolved === root || resolved.startsWith(root + sep)) && existsSync(resolved)) {
+      try { return readFileSync(resolved, 'utf8'); } catch { return s; }
+    }
   }
   return s;
 }

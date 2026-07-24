@@ -12,9 +12,14 @@ calling the **council MCP server** tools directly.
 ## Flow
 
 1. **Inventory** - read Mitchell's career corpus (`~/Documents/career-ops`: `cv.md`,
-   `config/profile.yml`, `modes/_profile.md`) and snapshot his live GitHub at
-   `github.com/mitwilli-create` (`gh repo list mitwilli-create --limit 100`,
-   including private, plus the profile README).
+   `config/profile.yml`, `modes/_profile.md`) and snapshot his live GitHub. Two
+   separate fetches: (a) the repository inventory + metadata via
+   `gh repo list mitwilli-create --limit 100` (include private), and (b) the
+   profile README on its own, which lives in the special
+   `mitwilli-create/mitwilli-create` repo, e.g.
+   `gh api repos/mitwilli-create/mitwilli-create/readme -H "Accept: application/vnd.github.raw"`.
+   `gh repo list` returns repo metadata only, never the profile README, so fetch
+   the README explicitly.
 2. **Research the signals** - call `run_researcher("Current GitHub hiring-manager
    and recruiter signals for <target roles: FDE, AI Solutions Architect, AI
    Enablement, DevRel, Comms Lead> in 2026: what pinned repos, READMEs, commit
