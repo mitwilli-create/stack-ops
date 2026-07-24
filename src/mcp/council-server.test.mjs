@@ -51,7 +51,7 @@ function withEnv(overrides, fn) {
   for (const k of keys) saved[k] = process.env[k];
   for (const k of keys) delete process.env[k];
   for (const [k, v] of Object.entries(overrides)) process.env[k] = v;
-  return Promise.resolve(fn()).finally(() => {
+  return Promise.resolve().then(() => fn()).finally(() => {
     for (const k of keys) {
       if (saved[k] === undefined) delete process.env[k];
       else process.env[k] = saved[k];
