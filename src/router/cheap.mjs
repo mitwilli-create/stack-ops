@@ -26,10 +26,20 @@
  *   cheap "summarize each of these" --files src/*.mjs
  *   cat big.log | cheap --task log_triage "find the repeated stack traces"
  *   cheap --task bulk_summarize --files notes/*.md "one-line takeaway each"
+ *   cheap --skill plain-writing --task bulk_summarize --files docs/*.md "rewrite each"
  *   cheap --dry-run "..."        # show the routing decision, call nothing
+ *
+ * SKILLS ON THE CHEAP TIER (--skill, added 2026-07-25). A skill authored once was
+ * reachable from every interactive CLI but not from here, so bulk toil silently
+ * lost the house style that the skill encodes. --skill loads that one SKILL.md off
+ * disk and prepends it as instructions. This tier has no tools, so it can only run
+ * skills that transform TEXT (plain-writing, smart-brevity, voice-os); a skill that
+ * edits files or spawns agents needs a real agent CLI. The skill body is scanned by
+ * the privacy gate exactly like any other input, so a skill carrying personal
+ * context is refused here rather than quietly shipped to a third party.
  */
 import { readFileSync, appendFileSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { classifyAsync } from './privacy-gate.mjs';
 import { ROUTE } from './privacy-gate.mjs';
@@ -84,6 +94,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--task') out.task = argv[++i];
+    else if (a === '--skill') out.skill = argv[++i];
     else if (a === '--model') out.model = argv[++i];
     else if (a === '--dry-run') out.dryRun = true;
     else if (a === '--files') { while (argv[i + 1] && !argv[i + 1].startsWith('--')) out.files.push(argv[++i]); }
@@ -98,6 +109,76 @@ async function readStdin() {
   let d = '';
   for await (const c of process.stdin) d += c;
   return d;
+}
+
+// Where skill-fanout publishes the cross-CLI skill list. This tier has no skill
+// loader of its own, so it reads that manifest; if the manifest is missing it
+// falls back to the skills directory directly, so --skill still works on a
+// machine where the fanout has never run.
+const SKILL_REGISTRY = process.env.CHEAP_SKILL_REGISTRY
+  || join(homedir(), '.agents', 'skill-registry.json');
+const SKILL_DIRS = [
+  join(homedir(), '.claude', 'skills'),
+  join(homedir(), '.agents', 'skills'),
+];
+
+/**
+ * Resolve a skill name to its instruction text.
+ * @returns {{ text: string, path: string } | { error: string }}
+ */
+export function loadSkill(name, { registry = SKILL_REGISTRY, dirs = SKILL_DIRS } = {}) {
+  // The character class alone is not enough: it admits `.` and `..`, so a name
+  // of `..` would resolve to <dir>/../SKILL.md and read a file outside the skill
+  // roots. Reject dot segments explicitly, then confirm containment below.
+  if (typeof name !== 'string' || !/^[\w.-]+$/.test(name) || /^\.+$/.test(name)) {
+    return { error: `invalid skill name ${JSON.stringify(name)}` };
+  }
+
+  let path = null;
+  let known = [];
+  // Registry paths are NOT constrained to the skill roots on purpose. Many
+  // skills are symlinks into a checked-out library (skill-libraries/...), so the
+  // registry legitimately records a real path outside ~/.claude/skills; pinning
+  // it to those roots would break every symlinked skill. The registry is a local
+  // artifact this machine generates, and is trusted at the same level as the
+  // skill files themselves. The unvalidated-input path is the CLI argument, and
+  // that is what the name check above constrains.
+  try {
+    const parsed = JSON.parse(readFileSync(registry, 'utf8'));
+    known = (parsed.skills ?? []).map((s) => s.name);
+    path = (parsed.skills ?? []).find((s) => s.name === name)?.path ?? null;
+  } catch {
+    // No manifest on this machine, or it is unreadable. Fall through to disk.
+  }
+
+  if (!path) {
+    for (const dir of dirs) {
+      const candidate = resolve(dir, name, 'SKILL.md');
+      // Belt and braces on top of the name check: the resolved candidate must
+      // still sit under the root we started from.
+      if (!candidate.startsWith(resolve(dir) + sep)) continue;
+      try {
+        readFileSync(candidate, 'utf8');
+        path = candidate;
+        break;
+      } catch { /* try the next root */ }
+    }
+  }
+
+  if (!path) {
+    const near = known.filter((k) => k.includes(name) || name.includes(k)).slice(0, 5);
+    return {
+      error: `unknown skill ${JSON.stringify(name)}`
+        + (near.length ? `, did you mean: ${near.join(', ')}` : '')
+        + (known.length ? `\n  ${known.length} skills are registered; see ${registry}` : ''),
+    };
+  }
+
+  try {
+    return { text: readFileSync(path, 'utf8'), path };
+  } catch (e) {
+    return { error: `skill ${name} is registered at ${path} but could not be read: ${e.code}` };
+  }
 }
 
 function logDecision(record) {
@@ -123,7 +204,33 @@ if (!body.trim()) {
   process.exit(2);
 }
 
-const decision = await classifyAsync({ text: body, paths: args.files });
+// Resolve --skill BEFORE the gate runs, so the skill's own text is scanned along
+// with everything else. A skill carrying personal context must be refused here,
+// not quietly forwarded to a third-party model.
+let skillPreamble = '';
+if (args.skill) {
+  const loaded = loadSkill(args.skill);
+  if (loaded.error) {
+    console.error(`cheap: ${loaded.error}`);
+    logDecision({ ts: new Date().toISOString(), outcome: 'refused', reason: 'unknown-skill', skill: args.skill });
+    process.exit(9);
+  }
+  skillPreamble = [
+    `Follow the instructions in this skill for the task below.`,
+    `It has no tools available, so apply it as guidance for producing text.`,
+    '',
+    `===== SKILL: ${args.skill} (${loaded.path}) =====`,
+    loaded.text,
+    `===== END SKILL =====`,
+    '',
+  ].join('\n');
+}
+
+// The model sees skill + request; the bulk-threshold advisory below measures only
+// the user's own input, so a large skill never masks a too-small task.
+const payload = skillPreamble + body;
+
+const decision = await classifyAsync({ text: payload, paths: args.files });
 
 // A sensitive request is NOT quietly rerouted to Anthropic here. This command's
 // entire purpose is the cheap path; if the gate says no, the honest outcome is to
@@ -160,7 +267,7 @@ if (body.length < BULK_THRESHOLD_CHARS && !args.dryRun) {
 }
 
 if (args.dryRun) {
-  console.log(JSON.stringify({ route: decision.route, task: args.task || null, model, ladder, chars: body.length, files: args.files.length }, null, 2));
+  console.log(JSON.stringify({ route: decision.route, task: args.task || null, skill: args.skill || null, model, ladder, chars: body.length, skillChars: skillPreamble.length, files: args.files.length }, null, 2));
   process.exit(0);
 }
 
@@ -192,7 +299,7 @@ for (let i = 0; i < candidates.length; i++) {
       },
       body: JSON.stringify({
         model: rungModel,
-        messages: [{ role: 'user', content: body }],
+        messages: [{ role: 'user', content: payload }],
         // ZERO-DATA-RETENTION IS MANDATORY on this path (ruled 2026-07-19, hardened
         // 2026-07-22). Auto can land a prompt at ANY catalog provider under varying
         // retention terms, so the fix is at the mechanism, not the data. A provider
@@ -277,6 +384,7 @@ for (let i = 0; i < candidates.length; i++) {
     ts: new Date().toISOString(),
     outcome: 'ok',
     task: args.task || null,
+    skill: args.skill || null,
     requested: rungModel,
     rung: i,
     served: json?.model ?? null,          // what the provider actually served
@@ -334,7 +442,7 @@ try {
     // never the privacy posture.
     body: JSON.stringify({
       model: ESCALATION_MODEL,
-      messages: [{ role: 'user', content: body }],
+      messages: [{ role: 'user', content: payload }],
       provider: { data_collection: 'deny', zdr: true },
     }),
   });
