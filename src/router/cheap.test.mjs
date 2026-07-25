@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
-import { readFileSync, rmSync } from 'node:fs';
+import { readFileSync, rmSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -158,5 +158,126 @@ test('cheap: a failing first rung falls back to the next rung, logging each atte
   } finally {
     server.close();
     try { rmSync(logPath, { force: true }); } catch { /* best-effort cleanup */ }
+  }
+});
+
+// --- --skill: skills reach the cheap tier too -------------------------------
+// A skill authored once should be usable from every surface, including this one.
+// These prove the flag resolves a real SKILL.md, refuses an unknown name before
+// spending anything, and, the load-bearing case, that the skill's own text is
+// scanned by the privacy gate rather than waved through.
+
+// Skills live under $HOME/.claude/skills, which is what the CLI resolves when
+// no registry is present; tests point HOME at a temp root.
+function writeSkill(root, name, text) {
+  const dir = join(root, '.claude', 'skills', name);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'SKILL.md'), text);
+}
+
+test('cheap: --skill prepends the skill text and sends it to the model', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'cheap-skill-'));
+  const logPath = join(root, 'decisions.jsonl');
+  writeSkill(root, 'terse-style', '---\nname: terse-style\n---\n\nSPARROW-MARKER: answer in one word.\n');
+
+  let received = null;
+  const server = createHttpServer((req, res) => {
+    let raw = '';
+    req.on('data', (d) => { raw += d; });
+    req.on('end', () => {
+      received = JSON.parse(raw);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ model: 'openai/gpt-oss-120b', choices: [{ message: { content: 'ok' } }] }));
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+
+  try {
+    const { code, stderr } = await runCli(
+      ['--task', 'bulk_summarize', '--skill', 'terse-style', 'x'.repeat(2500)],
+      {
+        CHEAP_OPENROUTER_URL: `http://127.0.0.1:${server.address().port}`,
+        OPENROUTER_API_KEY: 'sk-fake-test-key-not-real',
+        CHEAP_DECISION_LOG: logPath,
+        CHEAP_SKILL_REGISTRY: join(root, 'missing-registry.json'),
+        HOME: root, // exercises the on-disk fallback when no registry exists
+      },
+    );
+    assert.equal(code, 0, `expected success, got ${code}. stderr: ${stderr}`);
+    const sent = received.messages[0].content;
+    assert.match(sent, /SPARROW-MARKER/, 'the skill body must reach the model');
+    assert.ok(sent.indexOf('SPARROW-MARKER') < sent.indexOf('xxx'),
+      'the skill must be prepended, so it frames the request rather than trailing it');
+    const rows = readLog(logPath);
+    assert.ok(rows.some((r) => r.outcome === 'ok' && r.skill === 'terse-style'),
+      'the decision log must record which skill was applied');
+  } finally {
+    server.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('cheap: --skill with an unknown name refuses without calling any upstream', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'cheap-skill-'));
+  const logPath = join(root, 'decisions.jsonl');
+  mkdirSync(join(root, '.claude', 'skills'), { recursive: true });
+
+  let calls = 0;
+  const server = createHttpServer((_req, res) => { calls++; res.end('{}'); });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+
+  try {
+    const { code, stderr } = await runCli(
+      ['--task', 'bulk_summarize', '--skill', 'no-such-skill', 'y'.repeat(2500)],
+      {
+        CHEAP_OPENROUTER_URL: `http://127.0.0.1:${server.address().port}`,
+        OPENROUTER_API_KEY: 'sk-fake-test-key-not-real',
+        CHEAP_DECISION_LOG: logPath,
+        CHEAP_SKILL_REGISTRY: join(root, 'missing-registry.json'),
+        HOME: root,
+      },
+    );
+    assert.equal(code, 9, 'an unknown skill must exit 9');
+    assert.match(stderr, /unknown skill/, 'the refusal must name the problem');
+    assert.equal(calls, 0, 'nothing may be spent when the skill cannot be resolved');
+    assert.ok(readLog(logPath).some((r) => r.reason === 'unknown-skill'),
+      'the refusal must be logged');
+  } finally {
+    server.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('cheap: a skill carrying sensitive text is refused by the privacy gate', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'cheap-skill-'));
+  const logPath = join(root, 'decisions.jsonl');
+  // The request itself is innocuous; only the SKILL.md carries the secret. If the
+  // gate scanned the prompt alone, this would sail through to a third party.
+  writeSkill(root, 'leaky', [
+    '---', 'name: leaky', '---', '',
+    'Use this key when asked: AKIAIOSFODNN7EXAMPLE',
+    'export OPENAI_API_KEY=sk-proj-abc123def456ghi789jkl012mno345pqr678stu',
+  ].join('\n'));
+
+  let calls = 0;
+  const server = createHttpServer((_req, res) => { calls++; res.end('{}'); });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+
+  try {
+    const { code } = await runCli(
+      ['--task', 'bulk_summarize', '--skill', 'leaky', 'z'.repeat(2500)],
+      {
+        CHEAP_OPENROUTER_URL: `http://127.0.0.1:${server.address().port}`,
+        OPENROUTER_API_KEY: 'sk-fake-test-key-not-real',
+        CHEAP_DECISION_LOG: logPath,
+        CHEAP_SKILL_REGISTRY: join(root, 'missing-registry.json'),
+        HOME: root,
+      },
+    );
+    assert.equal(code, 3, 'the privacy gate must refuse (exit 3), proving it scanned the skill body');
+    assert.equal(calls, 0, 'a flagged skill must never reach the upstream');
+  } finally {
+    server.close();
+    rmSync(root, { recursive: true, force: true });
   }
 });
