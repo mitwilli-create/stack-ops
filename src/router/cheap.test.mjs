@@ -281,3 +281,37 @@ test('cheap: a skill carrying sensitive text is refused by the privacy gate', as
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('cheap: --skill rejects dot-segment names instead of escaping the skill root', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'cheap-skill-'));
+  const logPath = join(root, 'decisions.jsonl');
+  mkdirSync(join(root, '.claude', 'skills'), { recursive: true });
+  // Plant a readable SKILL.md one level ABOVE the skills root. A name of '..'
+  // used to resolve straight to it.
+  writeFileSync(join(root, '.claude', 'SKILL.md'), 'ESCAPED-THE-ROOT');
+
+  let calls = 0;
+  const server = createHttpServer((_req, res) => { calls++; res.end('{}'); });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+
+  try {
+    for (const bad of ['..', '.', '...']) {
+      const { code, stderr } = await runCli(
+        ['--task', 'bulk_summarize', '--skill', bad, 'q'.repeat(2500)],
+        {
+          CHEAP_OPENROUTER_URL: `http://127.0.0.1:${server.address().port}`,
+          OPENROUTER_API_KEY: 'sk-fake-test-key-not-real',
+          CHEAP_DECISION_LOG: logPath,
+          CHEAP_SKILL_REGISTRY: join(root, 'missing-registry.json'),
+          HOME: root,
+        },
+      );
+      assert.equal(code, 9, `--skill ${bad} must be refused, got exit ${code}`);
+      assert.match(stderr, /invalid skill name/, `--skill ${bad} must fail the name check`);
+    }
+    assert.equal(calls, 0, 'no traversal attempt may reach an upstream');
+  } finally {
+    server.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

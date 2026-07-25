@@ -39,7 +39,7 @@
  * context is refused here rather than quietly shipped to a third party.
  */
 import { readFileSync, appendFileSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { classifyAsync } from './privacy-gate.mjs';
 import { ROUTE } from './privacy-gate.mjs';
@@ -127,12 +127,22 @@ const SKILL_DIRS = [
  * @returns {{ text: string, path: string } | { error: string }}
  */
 export function loadSkill(name, { registry = SKILL_REGISTRY, dirs = SKILL_DIRS } = {}) {
-  if (!name || !/^[\w.-]+$/.test(name)) {
+  // The character class alone is not enough: it admits `.` and `..`, so a name
+  // of `..` would resolve to <dir>/../SKILL.md and read a file outside the skill
+  // roots. Reject dot segments explicitly, then confirm containment below.
+  if (typeof name !== 'string' || !/^[\w.-]+$/.test(name) || /^\.+$/.test(name)) {
     return { error: `invalid skill name ${JSON.stringify(name)}` };
   }
 
   let path = null;
   let known = [];
+  // Registry paths are NOT constrained to the skill roots on purpose. Many
+  // skills are symlinks into a checked-out library (skill-libraries/...), so the
+  // registry legitimately records a real path outside ~/.claude/skills; pinning
+  // it to those roots would break every symlinked skill. The registry is a local
+  // artifact this machine generates, and is trusted at the same level as the
+  // skill files themselves. The unvalidated-input path is the CLI argument, and
+  // that is what the name check above constrains.
   try {
     const parsed = JSON.parse(readFileSync(registry, 'utf8'));
     known = (parsed.skills ?? []).map((s) => s.name);
@@ -143,7 +153,10 @@ export function loadSkill(name, { registry = SKILL_REGISTRY, dirs = SKILL_DIRS }
 
   if (!path) {
     for (const dir of dirs) {
-      const candidate = join(dir, name, 'SKILL.md');
+      const candidate = resolve(dir, name, 'SKILL.md');
+      // Belt and braces on top of the name check: the resolved candidate must
+      // still sit under the root we started from.
+      if (!candidate.startsWith(resolve(dir) + sep)) continue;
       try {
         readFileSync(candidate, 'utf8');
         path = candidate;
