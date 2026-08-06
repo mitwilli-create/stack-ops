@@ -57,6 +57,21 @@ Open risk: the 2026-08-06 finding that Claude Code billed the API despite the
 wrapper (`hasAvailableSubscription: false` plus an approved custom key). Until
 that is closed, check the first week's spend rather than assuming it is free.
 
+### Billing preflight, fail closed
+
+Standing rule: subscription first, API spend only after an explicit ruling. The
+run therefore refuses to start unless all three hold:
+
+1. `claudeBin` exists.
+2. That file actually contains `env -u ANTHROPIC_API_KEY`, so a bare `claude`
+   swapped in by mistake is caught rather than billed.
+3. A subscription credential is present in the keychain (existence check only,
+   `security find-generic-password` without `-w`, so no secret is ever read).
+
+If any fail, nothing runs and `latest-report.md` says why. There is no automatic
+fallback to metered API spend: the whole point is that a job you are asleep for
+cannot decide to start charging you.
+
 ## Operating it
 
 ```sh

@@ -373,8 +373,10 @@ function processRepo(repo) {
 // -------------------------------------------------------------- repo discovery
 
 function discoverRepos() {
+  // `; true` matters: with no matching dirs the final [ -d ] test fails and the
+  // shell exits 1, which would make execFileSync throw and kill the whole run.
   const names = execFileSync('/bin/sh', ['-c',
-    `cd ${JSON.stringify(CONFIG.rootDir)} && for d in */; do [ -d "$d/.git" ] && echo "\${d%/}"; done`,
+    `cd ${JSON.stringify(CONFIG.rootDir)} && for d in */; do [ -d "$d/.git" ] && echo "\${d%/}"; done; true`,
   ], { encoding: 'utf8' }).split('\n').filter(Boolean);
 
   const wanted = ONLY ? new Set(ONLY.split(',')) : null;
@@ -477,10 +479,65 @@ function writeReport(results) {
   return mdPath;
 }
 
+// ------------------------------------------------------- billing preflight
+//
+// Standing rule: subscription first, and API spend only after an explicit
+// ruling. This gate is FAIL CLOSED. If the subscription path is not provably
+// available, the run spends nothing rather than silently falling back to the
+// metered API. That fallback is exactly what produced the $1,377 surprise
+// across 2026-08-01..06.
+//
+// It cannot read the billing path out of the API response (no field exposes
+// it), so it verifies the three preconditions it can check, none of which
+// require reading a secret value.
+
+function preflightBilling() {
+  const problems = [];
+
+  if (!existsSync(CONFIG.claudeBin)) {
+    problems.push(`claudeBin missing: ${CONFIG.claudeBin}`);
+  } else {
+    // The wrapper must actually strip the key. A bare `claude` here would bill
+    // per token, because ANTHROPIC_API_KEY outranks subscription OAuth.
+    let body = '';
+    try { body = readFileSync(CONFIG.claudeBin, 'utf8'); } catch { /* handled below */ }
+    if (!body.includes('env -u ANTHROPIC_API_KEY')) {
+      problems.push(`${CONFIG.claudeBin} does not strip ANTHROPIC_API_KEY; it would bill the metered API`);
+    }
+  }
+
+  // Existence check only. `-w` would print the secret, so it is never used.
+  const keychain = run('/usr/bin/security',
+    ['find-generic-password', '-s', 'Claude Code-credentials']);
+  if (keychain.code !== 0) {
+    problems.push('no subscription credential in the keychain (run `claude` once to log in)');
+  }
+
+  return problems;
+}
+
 // ------------------------------------------------------------------------ main
 
 function main() {
   log(`=== nightly hygiene start (run ${RUN_ID})${DRY_RUN ? ' [DRY RUN]' : ''} ===`);
+
+  const billingProblems = preflightBilling();
+  if (billingProblems.length) {
+    for (const p of billingProblems) log(`BILLING PREFLIGHT FAILED: ${p}`);
+    log('refusing to run. Subscription first: no API spend without an explicit ruling.');
+    writeFileSync(join(CONFIG.logDir, 'latest-report.md'), [
+      `# Nightly hygiene, ${STARTED_AT.toISOString().slice(0, 10)}`,
+      '',
+      '**The run did not start.** The subscription path could not be verified, and this job',
+      'never falls back to metered API spend on its own.',
+      '',
+      ...billingProblems.map((p) => `- ${p}`),
+      '',
+      'Fix the above, or rule explicitly that API spend is acceptable for this job.',
+    ].join('\n'));
+    return;
+  }
+  log('billing preflight ok: subscription wrapper present, keychain credential present');
 
   const lockPath = join(CONFIG.logDir, 'run.lock');
   if (existsSync(lockPath)) {
