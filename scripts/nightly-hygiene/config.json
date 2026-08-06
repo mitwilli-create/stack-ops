@@ -1,0 +1,29 @@
+{
+  "rootDir": "/Users/mitchellwilliams/Documents",
+  "logDir": "/Users/mitchellwilliams/Library/Logs/stack-ops/nightly-hygiene",
+
+  "claudeBin": "/Users/mitchellwilliams/.claude/bin/claude",
+  "model": "sonnet",
+  "fallbackModel": null,
+  "effort": "medium",
+
+  "nightlyCostCapUsd": 12,
+
+  "perRepoTimeoutMs": 900000,
+  "verifyTimeoutMs": 300000,
+  "globalDeadlineMs": 21600000,
+
+  "verifyScripts": ["test", "typecheck", "lint", "check"],
+
+  "commitPreexistingDirty": false,
+
+  "skipRepos": ["llm-memory"],
+
+  "_notes": {
+    "skipRepos": "llm-memory is the memory vault. Its post-commit hook rebuilds mem0 and /wrap already commits it every session; a second writer invites conflicts. Remove it here if you want it swept too.",
+    "commitPreexistingDirty": "false means the job commits ONLY files it changed itself. Your ~500 pre-existing dirty files stay dirty and are listed in the morning report. Setting this true would have the job commit your in-progress work unattended, which is the personal-data leak path flagged on 2026-08-06.",
+    "model": "sonnet keeps 15 repos/night affordable on the subscription. Switch to opus if review depth matters more than throughput.",
+    "nightlyCostCapUsd": "Hard ceiling. The 2026-08-06 pilot measured $2.24 for one small repo (relocation-os, 14 turns), so an uncapped 14-repo run is roughly $31/night or $940/month IF it bills the metered API rather than the subscription. $12 covers about 5-6 repos a night; the repo order rotates daily so everything gets swept across a rota of roughly three nights. Raise it once you have confirmed from the Anthropic console that these runs are drawing the subscription.",
+    "globalDeadlineMs": "6h. Starting at 02:00 PT this hard-stops at 08:00 PT so the job is never still running when you sit down."
+  }
+}

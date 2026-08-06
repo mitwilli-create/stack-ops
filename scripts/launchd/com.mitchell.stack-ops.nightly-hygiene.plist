@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        com.mitchell.stack-ops.nightly-hygiene
+
+        Fires nightly at 02:00 PT. Walks every git repo under ~/Documents and,
+        per repo: prunes safely-deletable local branches, runs a headless Claude
+        review-and-fix pass (mp-code-review, mp-diagnosing-bugs,
+        sp-subagent-driven-development, git-shipping-safety), verifies, screens
+        the result for secrets and personal data, then commits and pushes to the
+        repo's CURRENT branch.
+
+        Ruled by Mitchell 2026-08-06: push straight to the branch, no PR gate.
+        Ten of fifteen repos sit on main/master, so for those this IS a push to
+        main. Four sit on active feature branches and push there instead, because
+        pushing feature work to main would destroy it.
+
+        Hard 6h deadline (globalDeadlineMs in config.json) so a 02:00 start is
+        always finished by 08:00 and never still running when he sits down.
+
+        Billing: invoked through ~/.claude/bin/claude, the wrapper that strips
+        ANTHROPIC_API_KEY so the run draws the Max subscription rather than the
+        metered API. Do NOT change this to a bare `claude`.
+
+        Log paths live OUTSIDE ~/Documents per the 2026-05-21 sandbox finding
+        (xpcproxy cannot write to plist StandardOut/ErrorPath under ~/Documents
+        on macOS Tahoe). The script path stays under Documents because it is
+        invoked via NODE_BIN, which is already TCC-granted.
+
+        Bootstrap:
+          mkdir -p ~/Library/Logs/stack-ops/nightly-hygiene
+          cp scripts/launchd/com.mitchell.stack-ops.nightly-hygiene.plist ~/Library/LaunchAgents/
+          launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mitchell.stack-ops.nightly-hygiene.plist
+
+        Disable for a night:
+          launchctl bootout gui/$(id -u)/com.mitchell.stack-ops.nightly-hygiene
+
+        Dry run by hand (changes nothing, reverts everything):
+          node ~/Documents/stack-ops/scripts/nightly-hygiene/nightly-hygiene.mjs --dry-run
+    -->
+
+    <key>Label</key>
+    <string>com.mitchell.stack-ops.nightly-hygiene</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-lc</string>
+        <string>cd /Users/mitchellwilliams/Documents/stack-ops || exit 1; export NVM_DIR=&quot;$HOME/.nvm&quot;; [ -s &quot;$NVM_DIR/nvm.sh&quot; ] &amp;&amp; . &quot;$NVM_DIR/nvm.sh&quot;; exec node &apos;/Users/mitchellwilliams/Documents/stack-ops/scripts/nightly-hygiene/nightly-hygiene.mjs&apos;</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mitchellwilliams</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>2</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- Wall-clock ceiling matching globalDeadlineMs, as a backstop if the
+         script's own deadline logic is ever bypassed. -->
+    <key>ExitTimeOut</key>
+    <integer>60</integer>
+
+    <!-- Log paths OUTSIDE ~/Documents per the 2026-05-21 sandbox finding. -->
+    <key>StandardOutPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/stack-ops/nightly-hygiene/launchd.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/stack-ops/nightly-hygiene/launchd.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/mitchellwilliams/.claude/bin:/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/mitchellwilliams</string>
+    </dict>
+</dict>
+</plist>
