@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mitchell.career-ops.regression-guard</string>
+
+    <!--
+        Daily regression-guard scan. Slotted at 06:00 PT — runs AFTER
+        system-maintainer (03:00 PT) and the overnight-haul completion window,
+        so the day's first audit catches any drift from autonomous work.
+
+        SHIPPED LOADED-BUT-DISABLED 2026-05-23 awaiting Mitchell's review of
+        the day-0 trial run. To enable AFTER reviewing the trial decision-doc:
+            launchctl enable gui/$(id -u)/com.mitchell.career-ops.regression-guard
+
+        Kill switch (runtime, no unload required):
+            launchctl setenv REGRESSION_GUARD_ENABLED false
+
+        Spec source:
+            /Users/mitchellwilliams/.claude/agents/runs/dealbreaker-final-20260523-132911-regression-agent-delta.md
+
+        Pattern F compliance — log paths MUST live under ~/Library/Logs/
+        (macOS Tahoe TCC blocks launchd writes to ~/Documents/).
+    -->
+        <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-lc</string>
+        <string>export NVM_DIR=&quot;$HOME/.nvm&quot;; [ -s &quot;$NVM_DIR/nvm.sh&quot; ] &amp;&amp; . &quot;$NVM_DIR/nvm.sh&quot;; exec node &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/launchd-wrapper.mjs&apos; &apos;--label=com.mitchell.career-ops.regression-guard&apos; &apos;--max-retries=0&apos; &apos;--retry-backoff-sec=60&apos; &apos;--&apos; &apos;node&apos; &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/agents/regression-guard.mjs&apos; &apos;--scheduled&apos;</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mitchellwilliams/Documents/career-ops</string>
+
+    <!-- 4-week calibration window (2026-05-25 → 2026-06-22): Mondays only.
+         After 4 clean Mondays, flip back to daily by removing the Weekday key.
+         See .claude/audit/regression-guard-tune-2026-05-23/notes.md for the
+         calibration plan + flip-back command.
+         CalendarInterval Hour is local time on macOS. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>1</integer>
+        <key>Hour</key>
+        <integer>6</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <!--
+        Log paths under ~/Library/Logs/career-ops/ per AGENTS.md Pattern F
+        (Tahoe sandbox blocks /Documents). DO NOT change these to anything
+        under ~/Documents/ — silent EX_CONFIG=78 respawn loop on Tahoe.
+    -->
+    <key>StandardOutPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/regression-guard.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/regression-guard.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/mitchellwilliams</string>
+    </dict>
+</dict>
+</plist>

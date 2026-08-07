@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mitchell.career-ops.jd-rescrape-nightly</string>
+
+        <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-lc</string>
+        <string>export NVM_DIR=&quot;$HOME/.nvm&quot;; [ -s &quot;$NVM_DIR/nvm.sh&quot; ] &amp;&amp; . &quot;$NVM_DIR/nvm.sh&quot;; exec node &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/launchd-wrapper.mjs&apos; &apos;--label=com.mitchell.career-ops.jd-rescrape-nightly&apos; &apos;--max-retries=0&apos; &apos;--retry-backoff-sec=60&apos; &apos;--&apos; &apos;node&apos; &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/jd-rescrape-nightly.mjs&apos;</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mitchellwilliams/Documents/career-ops</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>45</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- Log path MUST live outside ~/Documents/ - macOS Tahoe TCC blocks
+         launchd from writing to log files under Documents (silent EX_CONFIG=78).
+         Pattern F / feedback_tahoe_sandbox_calendar_interval.md. Fixed 2026-05-22. -->
+    <key>StandardOutPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/jd-rescrape-nightly-launchd.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/jd-rescrape-nightly-launchd.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/mitchellwilliams</string>
+    </dict>
+</dict>
+</plist>

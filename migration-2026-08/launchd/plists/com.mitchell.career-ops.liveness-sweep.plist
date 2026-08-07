@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.mitchell.career-ops.liveness-sweep</string>
+      <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-lc</string>
+        <string>export NVM_DIR=&quot;$HOME/.nvm&quot;; [ -s &quot;$NVM_DIR/nvm.sh&quot; ] &amp;&amp; . &quot;$NVM_DIR/nvm.sh&quot;; exec node &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/launchd-wrapper.mjs&apos; &apos;--label=com.mitchell.career-ops.liveness-sweep&apos; &apos;--max-retries=0&apos; &apos;--retry-backoff-sec=60&apos; &apos;--&apos; &apos;node&apos; &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/liveness-sweep.mjs&apos;</string>
+    </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/mitchellwilliams/Documents/career-ops</string>
+    <!-- 2026-05-22 Phase 3 (Liveness hardening): switched from daily 03:30 PT
+         to hourly top-of-hour (Minute=0, Hour unset) so apply-now queue stays
+         tight against ATS expirations within ~1h instead of ~24h. Delta-aware
+         audit in scripts/liveness-sweep.mjs means re-runs on already-discarded
+         rows are no-ops (no duplicate audit entries). CalendarInterval plists
+         don't need the nohup-wrapper (that's KeepAlive-only — Pattern F). -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Minute</key><integer>0</integer>
+  </dict>
+  <key>RunAtLoad</key><false/>
+    <!-- Log path MUST live outside ~/Documents/ - macOS Tahoe TCC blocks
+         launchd from writing to log files under Documents (silent EX_CONFIG=78).
+         Pattern F / feedback_tahoe_sandbox_calendar_interval.md. Fixed 2026-05-22. -->
+  <key>StandardOutPath</key>
+  <string>/Users/mitchellwilliams/Library/Logs/career-ops/liveness-sweep-launchd.out</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/mitchellwilliams/Library/Logs/career-ops/liveness-sweep-launchd.err</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    <key>HOME</key><string>/Users/mitchellwilliams</string>
+  </dict>
+</dict>
+</plist>

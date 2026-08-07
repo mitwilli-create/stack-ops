@@ -1,0 +1,21 @@
+diff --git a/AGENTS.md b/AGENTS.md
+index d2fed79..19a64f8 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -42,3 +42,16 @@ These apply to any Claude instance working in this repo, including off-machine (
+ 1. **Freshness re-anchor.** Before acting on the first input of a session, and again after any gap over ~3 hours, web-search to confirm the current Pacific date/time (PST/PDT-aware) and scan the task topic for anything that changed since your knowledge cutoff, before relying on training-data recall. Re-check any pending "today/tomorrow" commitment against the confirmed date.
+ 2. **Stack-search before building.** At the start of any new build / feature / reusable tool, first research what already exists (X, Reddit, Hacker News, Discord, dev forums, package registries) for highly-rated, peer-recommended solutions. Report BUILD-vs-ADOPT with sources; bias to ADOPT over BUILD unless there is a real, audience-worthy gap. Build for an audience, not just yourself.
+ <!-- END STANDING-RULES -->
++
++## Distilled outreach-voice rules (auto-managed)
++
++<!-- BEGIN DISTILLED: distill-session-preferences (topic: outreach-voice) -->
++- Plain literal statements beat writerly formulations. "I'm making a move" becomes "I'm looking for roles outside of Google". State the actual situation, do not reach for the elegant phrasing. <!-- id:ae5beaad00 evidence:3 -->
++- No internal org jargon or unexpanded acronyms in anything an outsider reads. "xGE" means nothing outside Google. Spell it out on first reference or describe the function instead ("comms and content strategy"). <!-- id:38052d1f86 evidence:3 -->
++- Google tenure has three true framings and they must never be "corrected" into each other: six years as senior comms and content strategist in Corporate Engineering (April 2018 to June 2024), two years in xGE (June 2024 to present), eight years at Google total. Verified against cv.md line 12. News is a SEPARATE eight years. The only real error is aggregating news and Google into one number. <!-- id:fe662ee893 evidence:3 -->
++- Replace rhetorical intensity with a concrete verifiable fact. Downgrade the superlative and add the specific event, name, or number. "The company I keep coming back to" became "on my radar" plus a real conversation at the AIE World's Fair. <!-- id:feae68c732 evidence:2 -->
++- Never infer a pronoun for a real person. When pronouns are unstated use they/them or restructure the sentence. This is a correctness rule, not a style preference. <!-- id:67a34be32b evidence:1 -->
++- Provisional (1 occurrence): ask the real question outright. Softness belongs on the favor being requested, never on the question being asked. <!-- id:c3af5396bc evidence:1 -->
++- Provisional (1 occurrence): close warm, turning back toward the reader, rather than ending on the ask. <!-- id:9a65d0e9bd evidence:1 -->
++- Provisional (1 occurrence): DMs keep a conversational register. Casual intensifiers and mild repetition stay. Do not de-duplicate a DM like edited prose. <!-- id:325648fa78 evidence:1 -->
++<!-- END DISTILLED: distill-session-preferences (topic: outreach-voice) -->

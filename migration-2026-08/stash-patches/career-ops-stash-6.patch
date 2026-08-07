@@ -1,0 +1,710 @@
+diff --git a/scripts/build-dashboard.mjs b/scripts/build-dashboard.mjs
+index 80a0ac15..7dcd6118 100644
+--- a/scripts/build-dashboard.mjs
++++ b/scripts/build-dashboard.mjs
+@@ -18,6 +18,7 @@
+ import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync } from 'fs';
+ import { join, dirname, basename } from 'path';
+ import { execSync } from 'child_process';
++import { isDemoMode, resolveDataPath } from '../lib/demo-paths.mjs';
+ import yaml from 'js-yaml';
+ import { marked } from 'marked';
+ import { renderTpgmWidget } from '../lib/tpgm-dashboard-widget.mjs';
+@@ -74,6 +75,7 @@ import { resolveCooldownContext } from '../lib/cooldown-context.mjs';
+ // See lib/cache-freshness.mjs for the threshold registry + RSD-safe badge renderer.
+ import { cacheAgeBucket, renderCacheStalenessInline } from '../lib/cache-freshness.mjs';
+ import { gateRow as _gateRow } from '../lib/apply-now-queue-gate.mjs';
++import { PAT, EXCL } from '../lib/retired-metric-pattern.mjs';
+ const parseYaml = yaml.load;
+ 
+ // ── Phase 4.1 (2026-05-22 closure / P8) — credentials cache for chip + modal ──
+@@ -138,22 +140,34 @@ function _checkTokenCohesion() {
+ _checkTokenCohesion();
+ 
+ const ROOT = process.cwd();
+-const APPLICATIONS_PATH = join(ROOT, 'data/applications.md');
+-const PIPELINE_PATH = join(ROOT, 'data/pipeline.md');
+-const SCAN_HISTORY_PATH = join(ROOT, 'data/scan-history.tsv');
+-const BATCH_STATE_PATH = join(ROOT, 'batch/batch-state.tsv');
+-const PORTALS_PATH = join(ROOT, 'portals.yml');
+-const REPORTS_DIR = join(ROOT, 'reports');
+-const HEARTBEAT_GLOB = (date) => join(ROOT, `data/heartbeat-${date}.md`);
+-const OVERPAY_CURRENT_PATH = join(ROOT, 'data/overpay-signals/CURRENT.md');
+-const ROLE_ENRICHMENT_DIR = join(ROOT, 'data/role-enrichment');
+-const TEAM_HEALTH_DIR = join(ROOT, 'data/team-health');
+-const PROFILE_YML_PATH = join(ROOT, 'config/profile.yml');
+-const CV_PATH = join(ROOT, 'cv.md');
+-const OUTREACH_TEMPLATES_PATH = join(ROOT, 'data/outreach-templates.md');
+-const OUT_PATH = join(ROOT, 'dashboard/index.html');
+-const XGE_BASELINE_PATH = join(ROOT, 'data/xge-baseline.json');
+-const XGE_BASELINE_EXAMPLE_PATH = join(ROOT, 'data/xge-baseline.example.json');
++// Demo-mode note (2026-07-13): every real-data constant below routes through
++// resolveDataPath() (lib/demo-paths.mjs) so CAREER_OPS_DEMO=1 redirects them
++// to the fabricated fixtures under data/demo/ instead of Mitchell's real
++// applications/reports/comp/cv data. OUT_PATH is also demo-gated below so a
++// demo build writes dashboard/demo-index.html and NEVER touches the real
++// dashboard/index.html.
++const APPLICATIONS_PATH = resolveDataPath('data/applications.md');
++const PIPELINE_PATH = resolveDataPath('data/pipeline.md');
++const SCAN_HISTORY_PATH = resolveDataPath('data/scan-history.tsv');
++const BATCH_STATE_PATH = resolveDataPath('batch/batch-state.tsv');
++const PORTALS_PATH = resolveDataPath('portals.yml');
++const REPORTS_DIR = resolveDataPath('reports');
++const HEARTBEAT_GLOB = (date) => isDemoMode() ? resolveDataPath('data/heartbeat-demo.md') : join(ROOT, `data/heartbeat-${date}.md`);
++const OVERPAY_CURRENT_PATH = resolveDataPath('data/overpay-signals/CURRENT.md');
++const ROLE_ENRICHMENT_DIR = resolveDataPath('data/role-enrichment');
++const TEAM_HEALTH_DIR = resolveDataPath('data/team-health');
++const PROFILE_YML_PATH = resolveDataPath('config/profile.yml');
++const CV_PATH = resolveDataPath('cv.md');
++const OUTREACH_TEMPLATES_PATH = resolveDataPath('data/outreach-templates.md');
++const OUT_PATH = isDemoMode() ? join(ROOT, 'dashboard/demo-index.html') : join(ROOT, 'dashboard/index.html');
++const XGE_BASELINE_PATH = resolveDataPath('data/xge-baseline.json');
++// 2026-07-13 correction: despite the "committed public-info default" framing,
++// data/xge-baseline.example.json's actual contents are Mitchell's real
++// employer/role/comp approximation ("Mitchell @ Google xGE") — verified
++// leaking into a demo build via window._XGE_BASELINE. Route through
++// resolveDataPath() like every other real-data path instead of assuming it
++// was safe because it's committed.
++const XGE_BASELINE_EXAMPLE_PATH = resolveDataPath('data/xge-baseline.example.json');
+ 
+ // ── 4.03 (2026-05-22) — xGE baseline for comp comparison table ────
+ // Loaded at build time, injected as window._XGE_BASELINE into the dashboard.
+@@ -268,7 +282,7 @@ function loadEmailTemplates() {
+ function loadPipelineActivity() {
+   function tryRead(rel) {
+     try {
+-      const fp = join(ROOT, rel);
++      const fp = resolveDataPath(rel);
+       if (!existsSync(fp)) return null;
+       const raw = readFileSync(fp, 'utf-8');
+       return JSON.parse(raw);
+@@ -405,7 +419,7 @@ function loadLastBatchSummary() {
+ function loadPrewarmStatus() {
+   try {
+     const today = new Date().toISOString().slice(0, 10);
+-    const fp = join(ROOT, 'data', 'prewarm-status', today + '.json');
++    const fp = join(resolveDataPath('data/prewarm-status'), today + '.json');
+     if (!existsSync(fp)) return null;
+     const raw = JSON.parse(readFileSync(fp, 'utf-8'));
+     // Compute ready / deferred counts for the summary line.
+@@ -459,7 +473,7 @@ function readReportOnce(reportPath) {
+     _reportCacheHits++;
+     return _reportCache.get(reportPath);
+   }
+-  const fullPath = join(ROOT, reportPath);
++  const fullPath = resolveDataPath(reportPath);
+   if (!existsSync(fullPath)) {
+     const empty = {
+       exists: false, text: '',
+@@ -523,7 +537,7 @@ function readReportOnce(reportPath) {
+   if (_needsFallback) {
+     const sibling = _findRichSiblingReport(reportPath);
+     if (sibling && sibling !== reportPath) {
+-      const siblingFull = join(ROOT, sibling);
++      const siblingFull = resolveDataPath(sibling);
+       if (existsSync(siblingFull)) {
+         const sibText = readFileSync(siblingFull, 'utf-8');
+         const sibComp = _parseComp(sibText);
+@@ -554,7 +568,7 @@ let _reportDirListCache = null;
+ function _listReportFiles() {
+   if (_reportDirListCache) return _reportDirListCache;
+   try {
+-    _reportDirListCache = readdirSync(join(ROOT, 'reports')).filter(f => f.endsWith('.md'));
++    _reportDirListCache = readdirSync(resolveDataPath('reports')).filter(f => f.endsWith('.md'));
+   } catch { _reportDirListCache = []; }
+   return _reportDirListCache;
+ }
+@@ -647,7 +661,7 @@ function _findRichSiblingReport(reportPath) {
+   // council-eval reports are large but skip Blocks C/D/E/F entirely.
+   const _scoreSibling = (c) => {
+     try {
+-      const fp = join(ROOT, 'reports', c.f);
++      const fp = join(resolveDataPath('reports'), c.f);
+       const text = readFileSync(fp, 'utf-8');
+       let score = 0;
+       // Each present block adds to score
+@@ -1590,7 +1604,7 @@ function _networkAtCompanySafe(company) {
+ // directly (no Cursor required, no key-shortcut needed).
+ function renderReportToHtml(reportPath, outputDir) {
+   if (!reportPath) return null;
+-  const fullPath = join(ROOT, reportPath);
++  const fullPath = resolveDataPath(reportPath);
+   if (!existsSync(fullPath)) return null;
+   if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
+ 
+@@ -2414,9 +2428,36 @@ function getWhyGapsDontBlock(reportPath) {
+   return readReportOnce(reportPath)?.whyGapsDontBlock || '';
+ }
+ 
++// Render-layer guard: reports/ is a frozen audit trail, so a report written
++// before a metric was retired (or ruled factually false) still carries the old
++// claim on disk and MUST NOT be edited. But the story card is headed "Stories
++// Mitchell can use in his application" — rendering such a story invites him to
++// pitch it. Born 2026-07-16: reports/2723-…-2026-06-04.md recommended the
++// never-true "xGE AI Champions adoption comms" (58% vs a 37% Google average) as
++// the case study for an Anthropic Comms Lead interview, and the dashboard
++// surfaced it verbatim. Suppress at render; leave the audit record intact.
++// PAT/EXCL are imported, never redefined here — lib/retired-metric-pattern.mjs
++// is the single source of truth and tests/retired-metric-pattern-single-source
++// .test.mjs asserts no other file under scripts/ + lib/ declares them.
++const RETIRED_CLAIM_RE = new RegExp(PAT);
++const RETIRED_CLAIM_EXCL_RE = new RegExp(EXCL);
++
++function carriesRetiredClaim(text) {
++  // Line-wise to honour the EXCL disclosure-note allowlist ("…dropped",
++  // "No retired metrics: <list>"), matching the `grep -nE PAT | grep -vE EXCL`
++  // usage contract the module documents.
++  return String(text || '')
++    .split('\n')
++    .some(l => RETIRED_CLAIM_RE.test(l) && !RETIRED_CLAIM_EXCL_RE.test(l));
++}
++
+ function getTopStories(reportPath, limit = 2) {
+   const stories = readReportOnce(reportPath)?.topStories || [];
+-  return stories.slice(0, limit);
++  // Filter BEFORE slice so a suppressed story backfills from the next clean
++  // one rather than leaving the card short.
++  return stories
++    .filter(s => !carriesRetiredClaim(s?.story) && !carriesRetiredClaim(s?.requirement))
++    .slice(0, limit);
+ }
+ 
+ function getCompetitiveEdge(reportPath, limit = 5) {
+@@ -2579,7 +2620,7 @@ function loadBatchSnapshot() {
+   // Total comes from batch-input.tsv if present; otherwise fall back to state
+   // row count. Take the max of the two to handle the case where state has
+   // older completed rows than the current input (input got rotated).
+-  const inputPath = join(ROOT, 'batch/batch-input.tsv');
++  const inputPath = resolveDataPath('batch/batch-input.tsv');
+   let total = lines.length;
+   if (existsSync(inputPath)) {
+     const inputLines = readFileSync(inputPath, 'utf-8').split('\n').filter(l => l.trim() && !l.startsWith('id'));
+@@ -3292,7 +3333,7 @@ function _computeIntelFreshness(r) {
+   try {
+     const cSlug = String(r.company || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+     const rSlug = String(r.role    || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+-    const hmPath = join(ROOT, 'data', 'hm-intel', `${cSlug}-${rSlug}.json`);
++    const hmPath = resolveDataPath(`data/hm-intel/${cSlug}-${rSlug}.json`);
+     if (!existsSync(hmPath)) {
+       // Even with hm-intel missing, check multi-slot status — if OTHER slots
+       // are present (e.g., toxicity + positioning), surface 'partial' instead
+@@ -3638,7 +3679,7 @@ function renderRow(r, idx) {
+   const _pr09RSlug = String(r.role||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
+   // Row slug for auto-enrich endpoint (company-role format, max 80 chars)
+   const _pr09RowSlug = (_pr09CSlug + '-' + _pr09RSlug).replace(/^-+|-+$/g,'').slice(0, 80);
+-  const _pr09HmPath = join(ROOT, 'data', 'hm-intel', `${_pr09CSlug}-${_pr09RSlug}.json`);
++  const _pr09HmPath = resolveDataPath(`data/hm-intel/${_pr09CSlug}-${_pr09RSlug}.json`);
+   const _pr09HmBadge = _buildTimeStalenessInline('hm-intel', _pr09HmPath, 'hm-intel', _pr09RowSlug);
+   // Role-enrichment: find file path by scanning the cache map (key = company|role lowercase)
+   const _pr09ReBadge = (() => {
+@@ -3837,7 +3878,7 @@ function renderRow(r, idx) {
+   const _slugifyStory = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80);
+   const _storyChildPath = (s) => {
+     const slug = _slugifyStory(String(s.story || '').slice(0, 60));
+-    const fp = join(ROOT, 'dashboard/stories', `${slug}.html`);
++    const fp = join(resolveDataPath('dashboard/stories'), `${slug}.html`);
+     return existsSync(fp) ? `stories/${slug}.html` : null;
+   };
+   // Wave C-A drill-in: each story row → story:{num}:{story-slug}
+@@ -4065,7 +4106,7 @@ function renderRow(r, idx) {
+         try {
+           const _cSlug = String(r.company||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
+           const _rSlug = String(r.role||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
+-          const _hmPath = join(ROOT, 'data', 'hm-intel', `${_cSlug}-${_rSlug}.json`);
++          const _hmPath = resolveDataPath(`data/hm-intel/${_cSlug}-${_rSlug}.json`);
+           if (!existsSync(_hmPath)) return '';
+           const _hm = JSON.parse(readFileSync(_hmPath, 'utf-8'));
+           const _ci = _hm.comp_intelligence;
+@@ -4110,7 +4151,7 @@ function renderRow(r, idx) {
+           const padded = String(r.num || '').padStart(3, '0');
+           // Find the apply-pack directory for this row number
+           let packDir = null;
+-          const packBase = join(ROOT, 'data', 'apply-packs');
++          const packBase = resolveDataPath('data/apply-packs');
+           if (existsSync(packBase)) {
+             // readdirSync is already imported at module top (from 'fs')
+             const allPacks = readdirSync(packBase);
+@@ -4241,7 +4282,7 @@ let _COMP_FLOORS = { floor: 175, seattleFloor: 180, targetMin: 200, targetMax: 3
+ // data/builder-log.json is generated nightly by scripts/agents/builder-log.mjs.
+ // Returns null if the file doesn't exist yet (widget renders an empty/install state).
+ function loadBuilderLog() {
+-  const fp = join(ROOT, 'data', 'builder-log.json');
++  const fp = resolveDataPath('data/builder-log.json');
+   if (!existsSync(fp)) return null;
+   try {
+     const data = JSON.parse(readFileSync(fp, 'utf-8'));
+@@ -4273,7 +4314,7 @@ function loadBuilderCommits(limit = 15) {
+ // 2026-05-19 — adjudicated target API/tool stack (council-of-models → dealbreaker).
+ // Source: data/council-target-apis-2026-05-19-adjudicated.md
+ function loadTargetApis() {
+-  const fp = join(ROOT, 'data', 'builder-target-apis.json');
++  const fp = resolveDataPath('data/builder-target-apis.json');
+   if (!existsSync(fp)) return null;
+   try { return JSON.parse(readFileSync(fp, 'utf-8')); }
+   catch { return null; }
+@@ -4474,7 +4515,7 @@ async function build() {
+   // canonical employer URL but the report .md still has the raw LinkedIn URL.
+   // (LEDGER-026 audit-2026-05-23 Part 3)
+   try {
+-    const aQ = JSON.parse(readFileSync(join(ROOT, 'data', 'apply-now-queue.json'), 'utf-8'));
++    const aQ = JSON.parse(readFileSync(resolveDataPath('data/apply-now-queue.json'), 'utf-8'));
+     const qByNum = new Map();
+     for (const r of (aQ.ranked || [])) {
+       if (r && r.num != null) qByNum.set(String(r.num), r);
+@@ -4553,7 +4594,7 @@ async function build() {
+   function loadRejectionHistory() {
+     const rejections = [];
+     // Source 1: auto-scraped JSON
+-    const autoPath = join(ROOT, 'data/rejection-history.json');
++    const autoPath = resolveDataPath('data/rejection-history.json');
+     if (existsSync(autoPath)) {
+       try {
+         const auto = JSON.parse(readFileSync(autoPath, 'utf-8'));
+@@ -4570,7 +4611,7 @@ async function build() {
+       } catch {}
+     }
+     // Source 2: corpus/rejections.md hand-stubbed entries
+-    const corpusPath = join(ROOT, 'corpus/rejections.md');
++    const corpusPath = resolveDataPath('corpus/rejections.md');
+     if (existsSync(corpusPath)) {
+       const text = readFileSync(corpusPath, 'utf-8');
+       for (const m of text.matchAll(/^#{2,3}\s+([^—\n]+?)\s+—\s+([^—\n]+?)\s+—\s+(\d{4}[-\/]\d{2}(?:[-\/]\d{2})?)/gm)) {
+@@ -4732,7 +4773,7 @@ async function build() {
+   // but the first render now shows the actual values immediately.
+   let triageAdvanceCount = 0;
+   try {
+-    const tap = join(ROOT, 'batch/triage-advance.tsv');
++    const tap = resolveDataPath('batch/triage-advance.tsv');
+     if (existsSync(tap)) {
+       const lines = readFileSync(tap, 'utf-8').split('\n').filter(l => l.trim() && !l.startsWith('url'));
+       triageAdvanceCount = lines.length;
+@@ -4747,7 +4788,7 @@ async function build() {
+   let polishPickerData = [];
+   let polishNeededCount = 0;
+   try {
+-    const aQforPick = JSON.parse(readFileSync(join(ROOT, 'data', 'apply-now-queue.json'), 'utf-8'));
++    const aQforPick = JSON.parse(readFileSync(resolveDataPath('data/apply-now-queue.json'), 'utf-8'));
+     for (const r of (aQforPick.ranked || [])) {
+       if (!r || r.num == null) continue;
+       const pStat = _polishStatusMap.byRowId.get(Number(r.num)) || null;
+@@ -4771,7 +4812,7 @@ async function build() {
+   } catch { /* default empty — modal shows empty-state */ }
+   let initialHealthChip = { label: 'health: ?', cls: 'pipeline-health-chip', title: 'Health check not run yet' };
+   try {
+-    const hp = join(ROOT, 'data/pipeline-health.json');
++    const hp = resolveDataPath('data/pipeline-health.json');
+     if (existsSync(hp)) {
+       const h = JSON.parse(readFileSync(hp, 'utf-8'));
+       const ageMin = Math.floor((Date.now() - Date.parse(h.checked_at)) / 60000);
+@@ -4791,7 +4832,7 @@ async function build() {
+   // pending a dedicated regression-alerts modal.
+   let initialRegressionChip = { label: 'regressions: —', cls: 'pipeline-health-chip', title: 'regression-guard has not run yet — see /regression-guard skill' };
+   try {
+-    const rgp = join(ROOT, 'data/dashboard-panels/regression-guard.json');
++    const rgp = resolveDataPath('data/dashboard-panels/regression-guard.json');
+     if (existsSync(rgp)) {
+       const r = JSON.parse(readFileSync(rgp, 'utf-8'));
+       const crit = r.severity_tally?.CRIT || 0;
+@@ -4820,7 +4861,7 @@ async function build() {
+   // detailed modal without a runtime API call.
+   let _regressionModalData = { severity_tally: { CRIT: 0, HIGH: 0, MED: 0, LOW: 0 }, top_15: [], canary_pass: 0, canary_total: 0, date: '', decision_doc_path: '' };
+   try {
+-    const _rgp2 = join(ROOT, 'data/dashboard-panels/regression-guard.json');
++    const _rgp2 = resolveDataPath('data/dashboard-panels/regression-guard.json');
+     if (existsSync(_rgp2)) {
+       const _r2 = JSON.parse(readFileSync(_rgp2, 'utf-8'));
+       _regressionModalData = {
+@@ -4841,7 +4882,7 @@ async function build() {
+   // (same target as the sidebar-batch widget).
+   let initialDispatchChip = { label: 'dispatch: ○ idle', cls: 'pipeline-dispatch-chip', title: 'No pipeline run in progress' };
+   try {
+-    const psp = join(ROOT, 'data/pipeline-process-state.json');
++    const psp = resolveDataPath('data/pipeline-process-state.json');
+     if (existsSync(psp)) {
+       const ps = JSON.parse(readFileSync(psp, 'utf-8'));
+       const jobs = Object.values(ps.jobs || {}).sort((a, b) =>
+@@ -4874,7 +4915,7 @@ async function build() {
+   // ── I1: Side-allocations tile data (Wave G1) ──────────────────────
+   // Load data/side-allocations.yml for the Overview section tile.
+   let sideAllocations = [];
+-  const SIDE_ALLOC_PATH = join(ROOT, 'data/side-allocations.yml');
++  const SIDE_ALLOC_PATH = resolveDataPath('data/side-allocations.yml');
+   try {
+     if (existsSync(SIDE_ALLOC_PATH)) {
+       const raw = parseYaml(readFileSync(SIDE_ALLOC_PATH, 'utf-8'));
+@@ -4893,9 +4934,9 @@ async function build() {
+   // can click into Gmail compose for outreach. Do NOT bake these into
+   // anything that would ship to a public surface.
+   const contactsDirectory = (() => {
+-    const CSV_PATH      = join(ROOT, 'data/linkedin/Connections.csv');
+-    const OUTREACH_PATH = join(ROOT, 'data/outreach-state.json');
+-    const OVERRIDES_PATH = join(ROOT, 'data/linkedin/overrides.json');
++    const CSV_PATH      = resolveDataPath('data/linkedin/Connections.csv');
++    const OUTREACH_PATH = resolveDataPath('data/outreach-state.json');
++    const OVERRIDES_PATH = resolveDataPath('data/linkedin/overrides.json');
+     const map = new Map(); // key: normalized name OR linkedin url
+ 
+     function _norm(s) { return String(s || '').trim().toLowerCase().replace(/\s+/g, ' '); }
+@@ -5019,7 +5060,7 @@ async function build() {
+     // no email. Key format matches _norm(name): lowercase "first last".
+     // Only updates existing map entries — never adds phantom contacts.
+     try {
+-      const ENRICHED_PATH = join(ROOT, 'data/contacts-enriched.json');
++      const ENRICHED_PATH = resolveDataPath('data/contacts-enriched.json');
+       if (existsSync(ENRICHED_PATH)) {
+         const raw = JSON.parse(readFileSync(ENRICHED_PATH, 'utf-8') || '{}');
+         const enrichedEntries = raw.entries || {};
+@@ -5098,7 +5139,7 @@ async function build() {
+       byCompanySlug.get(cs).push(c);
+     }
+     // Pre-load 2nd-degree paths per company (cached existence check)
+-    const twoDegDir = join(ROOT, 'data/linkedin/2nd-degree');
++    const twoDegDir = resolveDataPath('data/linkedin/2nd-degree');
+     const twoDegCache = new Map();
+     function _twoDegFor(companySlug) {
+       if (twoDegCache.has(companySlug)) return twoDegCache.get(companySlug);
+@@ -5109,7 +5150,7 @@ async function build() {
+       return data;
+     }
+     // Parse cv.md employer history once for overlap detection
+-    const cvPath = join(ROOT, 'cv.md');
++    const cvPath = resolveDataPath('cv.md');
+     const mitchellEmployers = [];
+     if (existsSync(cvPath)) {
+       const cvText = readFileSync(cvPath, 'utf8');
+@@ -5146,13 +5187,13 @@ async function build() {
+       return { pre_ipo_match: !!preIpo, archetype_match: !!archetypeMatch, composite_score: +score.toFixed(2) };
+     }
+     // Path to enrichment cache (lazily check existence; populated by refresh-master)
+-    const enrichmentCacheDir = join(ROOT, 'data/contact-enrichment-cache');
++    const enrichmentCacheDir = resolveDataPath('data/contact-enrichment-cache');
+     function _enrichmentFor(id) {
+       const fp = join(enrichmentCacheDir, `${id}.json`);
+       if (!existsSync(fp)) return null;
+       try { return JSON.parse(readFileSync(fp, 'utf8')); } catch(_) { return null; }
+     }
+-    const photosDir = join(ROOT, 'data/contact-photos');
++    const photosDir = resolveDataPath('data/contact-photos');
+     function _photoPath(id) {
+       const fp = join(photosDir, `${id}.jpg`);
+       return existsSync(fp) ? `data/contact-photos/${id}.jpg` : null;
+@@ -5253,7 +5294,7 @@ async function build() {
+     return out;
+   })();
+   try {
+-    const queueDir = join(ROOT, 'dashboard/data');
++    const queueDir = resolveDataPath('dashboard/data');
+     mkdirSync(queueDir, { recursive: true });
+     const queuePayload = {
+       _meta: {
+@@ -5264,7 +5305,7 @@ async function build() {
+       },
+       queue: enrichmentQueue,
+     };
+-    writeFileSync(join(ROOT, 'data/enrichment-queue.json'), JSON.stringify(queuePayload, null, 2));
++    writeFileSync(resolveDataPath('data/enrichment-queue.json'), JSON.stringify(queuePayload, null, 2));
+     writeFileSync(join(queueDir, 'enrichment-queue.json'), JSON.stringify(queuePayload));
+   } catch (qErr) {
+     console.warn('[build] enrichment-queue write failed:', qErr.message);
+@@ -5305,9 +5346,14 @@ async function build() {
+   //   • surfaces ("nags") for ages 4-30 days, with Copy prompt + Mark
+   //     answered buttons
+   let calibrationCard = { visible: false, date: null, age_days: null, questions: 0, file: null };
++  // Demo-mode note (2026-07-13): this card surfaces Mitchell's real personal
++  // weekly-calibration reflection prompts (data/weekly-calibration-prompt-
++  // *.md) — there's no fabricated-fixture equivalent worth authoring for a
++  // demo, so the feature is simply skipped (card stays hidden/default) when
++  // CAREER_OPS_DEMO=1 rather than scanning the real data/ directory.
+   try {
+-    const dataDir = join(ROOT, 'data');
+-    if (existsSync(dataDir)) {
++    const dataDir = isDemoMode() ? null : join(ROOT, 'data');
++    if (dataDir && existsSync(dataDir)) {
+       const files = readdirSync(dataDir)
+         .filter(f => /^weekly-calibration-prompt-\d{4}-\d{2}-\d{2}\.md$/.test(f))
+         .sort((a, b) => b.localeCompare(a));
+@@ -5355,6 +5401,14 @@ async function build() {
+   let tpgmChipArrow = '▬';
+   let tpgmChipBand  = 'PM-readiness';
+   try {
++    // Demo-mode note (2026-07-13): scripts/tpgm-tracker.mjs resolves its OWN
++    // real-data paths (data/courses.yml, data/skill-tracker/extracted/*.json
++    // — Mitchell's real learning/skill-building history) independently of
++    // this file's resolveDataPath() plumbing. Rather than patch a third
++    // script outside the 16-module scope, skip invoking it entirely in demo
++    // mode and fall straight into the existing "tracker unavailable"
++    // soft-fail below, which already renders a safe empty-state widget.
++    if (isDemoMode()) throw new Error('tpgm-tracker skipped in demo mode');
+     const trackerOut = execSync(`node ${JSON.stringify(join(ROOT, 'scripts/tpgm-tracker.mjs'))} --json`, {
+       cwd: ROOT,
+       timeout: 10000,
+@@ -5370,7 +5424,7 @@ async function build() {
+     tpgmChipScore = _pmComposite;
+     // Extract velocity arrow from tpgm-history.json (same file the widget writes)
+     try {
+-      const _histPath = join(ROOT, 'data', 'tpgm-history.json');
++      const _histPath = resolveDataPath('data/tpgm-history.json');
+       const _hist = JSON.parse(readFileSync(_histPath, 'utf-8'));
+       if (Array.isArray(_hist) && _hist.length >= 2) {
+         const _now = Date.now();
+@@ -5514,7 +5568,7 @@ async function build() {
+   // Helper: check if a file was modified within the last 24h
+   const _freshWithin24h = (filePath) => {
+     try {
+-      const st = statSync(join(ROOT, filePath));
++      const st = statSync(resolveDataPath(filePath));
+       return (_topOfPipeNow - st.mtimeMs) < 86400000;
+     } catch { return false; }
+   };
+@@ -5778,11 +5832,11 @@ async function build() {
+       const _rRSlug = String(_r.role||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
+       const _entry = { num: _rNum };
+       // hm-intel
+-      const _hmP = join(ROOT, 'data', 'hm-intel', `${_rCSlug}-${_rRSlug}.json`);
++      const _hmP = resolveDataPath(`data/hm-intel/${_rCSlug}-${_rRSlug}.json`);
+       const _hmB = cacheAgeBucket('hm-intel', _hmP);
+       _entry.hm = { isFresh: _hmB.isFresh, ageDays: Number.isFinite(_hmB.ageDays) ? Number(_hmB.ageDays.toFixed(1)) : null, ageDaysDisplay: _hmB.ageDaysDisplay || null, missing: _hmB.missing };
+       // context-notes (keyed by row.num)
+-      const _cnP = join(ROOT, 'data', 'context-notes', `${_rNum}.json`);
++      const _cnP = resolveDataPath(`data/context-notes/${_rNum}.json`);
+       const _cnB = cacheAgeBucket('context-notes', _cnP);
+       _entry.cn = { isFresh: _cnB.isFresh, ageDays: Number.isFinite(_cnB.ageDays) ? Number(_cnB.ageDays.toFixed(1)) : null, ageDaysDisplay: _cnB.ageDaysDisplay || null, missing: _cnB.missing };
+       _cacheAgeMap[_rNum] = _entry;
+@@ -6027,7 +6081,7 @@ async function build() {
+       let _maxMtime = 0;
+       let _newestPath = '';
+       for (const f of _corpusFiles) {
+-        const p = join(ROOT, f);
++        const p = resolveDataPath(f);
+         if (!existsSync(p)) continue;
+         try {
+           const m = statSync(p).mtimeMs;
+@@ -6049,12 +6103,19 @@ async function build() {
+ 
+     // Negotiation playbook (embedded once, re-used per comp drill-in)
+     try {
+-      const nbp = getNegotiationPlaybook({ base: 300000, competing_offers: 0 });
++      // Demo-mode note (2026-07-13): 300000 is Mitchell's real comp-target
++      // anchor (config/profile.yml). Use a distinct, obviously-generic
++      // placeholder figure in demo builds instead.
++      const nbp = getNegotiationPlaybook({ base: isDemoMode() ? 150000 : 300000, competing_offers: 0 });
+       _cbData.negotiationPlaybookHtml = renderPlaybookHtml(nbp);
+     } catch (_) { _cbData.negotiationPlaybookHtml = ''; }
+ 
+     // TPgM skill gap points (from tracker if available)
+     try {
++      // Demo-mode note (2026-07-13): see the other tpgm-tracker.mjs call
++      // site above — skip invoking it in demo mode since it independently
++      // resolves real data/courses.yml + data/skill-tracker/extracted/*.json.
++      if (isDemoMode()) throw new Error('tpgm-tracker skipped in demo mode');
+       const trackerOut = execSync(
+         `node ${JSON.stringify(join(ROOT, 'scripts/tpgm-tracker.mjs'))} --json`,
+         { cwd: ROOT, timeout: 8000, stdio: ['pipe','pipe','pipe'] }
+@@ -6209,7 +6270,7 @@ async function build() {
+         if (_slug) _slugSet.add(_slug);
+       }
+       // 2) Every slug that has a company-intel-cache directory
+-      const _intelCacheDir = join(ROOT, 'data/company-intel-cache');
++      const _intelCacheDir = resolveDataPath('data/company-intel-cache');
+       if (existsSync(_intelCacheDir)) {
+         try {
+           for (const _d of readdirSync(_intelCacheDir)) {
+@@ -6236,7 +6297,7 @@ async function build() {
+       // Persist the cache to disk so manual `node lib/toxicity-composite.mjs --slug=X`
+       // sees the same values the dashboard rendered.
+       try {
+-        const _cacheFp = join(ROOT, 'data/toxicity-composite.json');
++        const _cacheFp = resolveDataPath('data/toxicity-composite.json');
+         writeFileSync(_cacheFp, JSON.stringify(_cbData.toxicity, null, 2));
+       } catch (_) { /* non-fatal */ }
+     } catch (_) { _cbData.toxicity = {}; }
+@@ -6245,8 +6306,8 @@ async function build() {
+     // Schema: { glassdoor: string, blind: string, pros: string, cons: string }
+     try {
+       _cbData.companyReviews = {};
+-      const _gdDir = join(ROOT, 'data/glassdoor');
+-      const _blDir = join(ROOT, 'data/blind');
++      const _gdDir = resolveDataPath('data/glassdoor');
++      const _blDir = resolveDataPath('data/blind');
+       const _revSlugs = new Set();
+       if (existsSync(_gdDir)) readdirSync(_gdDir).forEach(f => f.endsWith('.json') && _revSlugs.add(f.replace(/\.json$/,'')));
+       if (existsSync(_blDir)) readdirSync(_blDir).forEach(f => f.endsWith('.json') && _revSlugs.add(f.replace(/\.json$/,'')));
+@@ -6266,7 +6327,7 @@ async function build() {
+     // Schema: { stage: str, status: str, valuation: str, ipo_target: str, rounds: [{date,series,amount,lead}] }
+     try {
+       _cbData.companyFunding = {};
+-      const _coDir = join(ROOT, 'data/companies');
++      const _coDir = resolveDataPath('data/companies');
+       if (existsSync(_coDir)) {
+         for (const _f of readdirSync(_coDir)) {
+           if (!_f.endsWith('.json')) continue;
+@@ -6329,7 +6390,7 @@ async function build() {
+       const _nmResult = computeNextMoves({ ..._nmInputs, topN: 5, skipN: 8 });
+       _cbData.nextMoves = _nmResult;
+       try {
+-        writeFileSync(join(ROOT, 'data/next-moves.json'), JSON.stringify(_nmResult, null, 2));
++        writeFileSync(resolveDataPath('data/next-moves.json'), JSON.stringify(_nmResult, null, 2));
+       } catch (_) { /* non-fatal */ }
+     } catch (_) { _cbData.nextMoves = { top_moves: [], skip_list: [], deadline_stats: {} }; }
+ 
+@@ -6338,7 +6399,7 @@ async function build() {
+     // Added 2026-05-21 to fix the dead-link bug (clicking story bullet →
+     // stories/*.html → "Not found").
+     try {
+-      const _storiesDir = join(ROOT, 'dashboard', 'stories');
++      const _storiesDir = resolveDataPath('dashboard/stories');
+       _cbData.storyPages = existsSync(_storiesDir)
+         ? readdirSync(_storiesDir)
+             .filter(f => f.endsWith('.html') && f !== 'index.html')
+@@ -6352,7 +6413,7 @@ async function build() {
+     // full-role story when a per-requirement chip page is absent (e.g. row #1, whose
+     // report has no Block F, so the canonical generator produced no chip pages).
+     try {
+-      const _narMap = join(ROOT, 'data', 'narrative-story-map.json');
++      const _narMap = resolveDataPath('data/narrative-story-map.json');
+       _cbData.narrativeStoryPages = existsSync(_narMap)
+         ? JSON.parse(readFileSync(_narMap, 'utf-8'))
+         : {};
+@@ -6375,7 +6436,7 @@ async function build() {
+     // block 2 of the page. See the matching `window._waveCBReadyPromise =
+     // fetch('/data/wave-cb.json')` shim in the dashboard's inline script.
+     try {
+-      const waveCBOutDir = join(ROOT, 'dashboard/data');
++      const waveCBOutDir = resolveDataPath('dashboard/data');
+       mkdirSync(waveCBOutDir, { recursive: true });
+       writeFileSync(join(waveCBOutDir, 'wave-cb.json'), jsonStr);
+     } catch (writeErr) {
+@@ -14029,7 +14090,7 @@ async function build() {
+     <h1 class="sr-only">Career-Ops Dashboard</h1>
+     <div class="toolbar-brand" aria-hidden="true">
+       <span class="brand-name">Career-Ops</span>
+-      <span class="brand-byline">by Mitchell Williams</span>
++      <span class="brand-byline">by ${isDemoMode() ? 'Demo Candidate' : 'Mitchell Williams'}</span>
+       <span class="brand-sync" id="toolbar-sync-ts"></span>
+     </div>
+     <button class="toolbar-btn cmdk-trigger" onclick="openCmdK()" title="Open command palette (⌘K / Ctrl-K)" aria-label="Open command palette (Cmd+K or Ctrl+K)">
+@@ -14822,15 +14883,23 @@ async function build() {
+     const phases = (tApi && tApi.gap_closure_30day) || [];
+     // Recent commits with SHA + message + age for the commit drill-in.
+     // Read /tmp/be-recent-commits.txt at build time (lines of SHA|msg|age|author).
++    // Demo-mode note (2026-07-13): /tmp/be-recent-commits.txt is real git log
++    // output (real commit messages + author names), independent of any
++    // dataPath()/resolveDataPath() plumbing — skip reading it entirely in
++    // demo mode rather than bake real commit history into the demo build.
+     let recentCommits = [];
+-    try {
+-      const txt = readFileSync('/tmp/be-recent-commits.txt', 'utf-8');
+-      recentCommits = txt.split('\n').filter(Boolean).map(line => {
+-        const [sha, message, age, author] = line.split('|');
+-        return { sha, message, age, author };
+-      });
+-    } catch { /* file optional */ }
+-    const repoUrl = 'https://github.com/mitwilli-create/career-ops';
++    if (!isDemoMode()) {
++      try {
++        const txt = readFileSync('/tmp/be-recent-commits.txt', 'utf-8');
++        recentCommits = txt.split('\n').filter(Boolean).map(line => {
++          const [sha, message, age, author] = line.split('|');
++          return { sha, message, age, author };
++        });
++      } catch { /* file optional */ }
++    }
++    // repoUrl is Mitchell's real GitHub repo — swap for an obviously-fake
++    // placeholder in demo mode so the drill-in never links a viewer to it.
++    const repoUrl = isDemoMode() ? 'https://github.com/demo-user/demo-repo' : 'https://github.com/mitwilli-create/career-ops';
+     return JSON.stringify({ entries: tierAEntries, phases, commits: recentCommits, repoUrl });
+   })()};
+   </script>`;
+@@ -29078,7 +29147,7 @@ function _onForceOverrideToggle() {
+ 
+ function _pipelineHeartbeatRecipient() {
+   // Hardcoded reflection of HEARTBEAT_TO in .env — purely cosmetic for the modal
+-  return 'mitwilli@gmail.com';
++  return '${isDemoMode() ? 'demo.candidate@example.com' : 'mitwilli@gmail.com'}';
+ }
+ 
+ function closePipelineModal() {
+@@ -32688,7 +32757,7 @@ function _renderPillPopover(d) {
+     var _prCompanySlug = (d.company || '').toLowerCase().replace(/[^a-z0-9]+/g, '.');
+     var _prCompanyDomain = _prCompanySlug ? _prCompanySlug + '.com' : '<company-domain>';
+     var _prApplyPackSlug = (d.company || 'company').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+-    var _prPrompt = '/researcher\\n\\nResearch all people connected to the **' + (d.role || '') + '** role at **' + (d.company || '') + '**. High-priority apply-now opportunity. Produce a fully synthesized people-intelligence report with three deliverables: (1) ranked contact list with verified emails and warm/cold signal, (2) relationship map showing referral paths and influence on the hiring decision, (3) per-person outreach playbook grounded in the public content of each contact. Save the completed report to ~/Documents/career-ops/apply-pack/ under the directory for "' + (d.company || '') + '" as people-research.md.\\n\\n## Known context\\n- Role: ' + (d.role || '') + ' at ' + (d.company || '') + '\\n- Likely recruiter: ' + _prRecruiter + ' (LinkedIn: ' + _prRecruiterLi + ')\\n- Likely hiring manager: ' + _prHm + ' (LinkedIn: ' + _prHmLi + ')\\n- My LinkedIn connections at ' + (d.company || '') + ': ' + (_prNetwork || 'none identified yet') + '\\n- Company domain for email discovery: ' + _prCompanyDomain + '\\n\\n## Research Phase 1 — Social signal sweep (route to Grok-4, live X/Twitter search)\\nFind:\\n- ' + _prRecruiter + ' and ' + _prHm + ' on X: handles, recent posts, topics they engage with and reply to\\n- Anyone at ' + (d.company || '') + ' posting publicly about the ' + (d.role || '') + ' team, hiring, or the AI/product stack\\n- X and Blind threads mentioning this role or the function it reports into\\n- LinkedIn posts (Grok web-search) from ' + (d.company || '') + ' employees announcing new hires or team milestones for this function\\n- Signals about the team roadmap, current priorities, and upcoming launches\\n\\n## Research Phase 2 — Deep people research (route to Perplexity sonar-deep-research)\\nFor each person identified in Phase 1 plus any additional leads found via LinkedIn and web search:\\n- Full name, current title and team at ' + (d.company || '') + ', LinkedIn URL\\n- Career background: prior employers, tenure at ' + (d.company || '') + ', role trajectory\\n- Public thought-leadership: talks, articles, posts, GitHub repos, open-source contributions\\n- Personal interests and causes they publicly support\\n- Shared ground with Mitchell Williams: AI/ML systems, applied AI products, program management, media-to-AI career arc, CNN/YouTube/NYT/Google background\\n- Best-contact platform and timing based on their posting cadence\\n\\n## Research Phase 3 — Relationship map\\nUsing Phase 1-2 findings, construct:\\n- Influence hierarchy: who has the most weight in the hiring decision for this role\\n- Referral paths from my known connections (' + (_prNetwork || 'to be identified') + ') to the recruiter and HM\\n- Warm-intro probability per path: High (direct or will intro) / Medium (shared connection, likely to help) / Low (cold)\\n- Recommended contact sequence: who to approach first based on warm-path strength and responsiveness signals\\n\\n## Research Phase 4 — Email discovery (Hunter.io, use HUNTER_API_KEY from .env)\\nStep 1: Call the Hunter.io domain-search endpoint for domain ' + _prCompanyDomain + ' with confidence_min=70 and type=personal. Parse results and match to identified contacts.\\nStep 2: For ' + _prRecruiter + ' and ' + _prHm + ' specifically, also call the Hunter.io email-finder endpoint (name + domain) to fill any gaps from domain-search.\\nStep 3: Cross-reference all email results against the Phase 1-2 roster.\\n\\n## Final synthesized report\\nSave to ~/Documents/career-ops/apply-pack/ — search for a directory containing "' + _prApplyPackSlug + '", use the first match, then save as people-research.md. If no matching directory exists, create ~/Documents/career-ops/apply-pack/' + _prApplyPackSlug + '/people-research.md.\\n\\n### Section 1 — Ranked contact list\\nTable: Name | Title | LinkedIn | Best Email (confidence %) | Warm or Cold | Priority Rank\\nOne row per identified contact, ranked by reach likelihood. Include a 1-line rationale per row.\\n\\n### Section 2 — Relationship map\\nText diagram showing my connections to intermediate nodes to the recruiter/HM. Label each path with warm-intro probability. Include the influence hierarchy for this function at ' + (d.company || '') + '.\\n\\n### Section 3 — Per-person outreach playbook\\nFor each contact in Section 1:\\n- Why this specific person — grounded in their actual public content, not generic reasons\\n- Best channel: LinkedIn DM / email / X reply — pick one and state the rationale\\n- 2-sentence personalized hook based on real published content or public activity\\n- Best time window based on posting and engagement patterns\\n\\n### Section 4 — Synthesis and first move\\n- Top recommendation: who to contact first, via which channel, with what exact opening message, and by what date\\n- Second and third moves if no response within 5 business days\\n- Key green flags or red flags from the research that should shape the outreach strategy\\n\\n## About Mitchell (use for personalization)\\n- 10+ years building AI-era content and product systems at CNN, YouTube, NYT, Google\\n- Target roles: Applied AI Engineer / AI Program Manager / Solutions Architect at AI-native companies\\n- Shipped production AI systems; technical + GTM hybrid background\\n- LinkedIn: linkedin.com/in/mitwilli | GitHub: mitwilli-create';
++    var _prPrompt = '/researcher\\n\\nResearch all people connected to the **' + (d.role || '') + '** role at **' + (d.company || '') + '**. High-priority apply-now opportunity. Produce a fully synthesized people-intelligence report with three deliverables: (1) ranked contact list with verified emails and warm/cold signal, (2) relationship map showing referral paths and influence on the hiring decision, (3) per-person outreach playbook grounded in the public content of each contact. Save the completed report to ~/Documents/career-ops/apply-pack/ under the directory for "' + (d.company || '') + '" as people-research.md.\\n\\n## Known context\\n- Role: ' + (d.role || '') + ' at ' + (d.company || '') + '\\n- Likely recruiter: ' + _prRecruiter + ' (LinkedIn: ' + _prRecruiterLi + ')\\n- Likely hiring manager: ' + _prHm + ' (LinkedIn: ' + _prHmLi + ')\\n- My LinkedIn connections at ' + (d.company || '') + ': ' + (_prNetwork || 'none identified yet') + '\\n- Company domain for email discovery: ' + _prCompanyDomain + '\\n\\n## Research Phase 1 — Social signal sweep (route to Grok-4, live X/Twitter search)\\nFind:\\n- ' + _prRecruiter + ' and ' + _prHm + ' on X: handles, recent posts, topics they engage with and reply to\\n- Anyone at ' + (d.company || '') + ' posting publicly about the ' + (d.role || '') + ' team, hiring, or the AI/product stack\\n- X and Blind threads mentioning this role or the function it reports into\\n- LinkedIn posts (Grok web-search) from ' + (d.company || '') + ' employees announcing new hires or team milestones for this function\\n- Signals about the team roadmap, current priorities, and upcoming launches\\n\\n## Research Phase 2 — Deep people research (route to Perplexity sonar-deep-research)\\nFor each person identified in Phase 1 plus any additional leads found via LinkedIn and web search:\\n- Full name, current title and team at ' + (d.company || '') + ', LinkedIn URL\\n- Career background: prior employers, tenure at ' + (d.company || '') + ', role trajectory\\n- Public thought-leadership: talks, articles, posts, GitHub repos, open-source contributions\\n- Personal interests and causes they publicly support\\n- Shared ground with ${isDemoMode() ? 'Demo Candidate' : 'Mitchell Williams'}: AI/ML systems, applied AI products, program management, media-to-AI career arc, ${isDemoMode() ? 'fabricated demo employers' : 'CNN/YouTube/NYT/Google'} background\\n- Best-contact platform and timing based on their posting cadence\\n\\n## Research Phase 3 — Relationship map\\nUsing Phase 1-2 findings, construct:\\n- Influence hierarchy: who has the most weight in the hiring decision for this role\\n- Referral paths from my known connections (' + (_prNetwork || 'to be identified') + ') to the recruiter and HM\\n- Warm-intro probability per path: High (direct or will intro) / Medium (shared connection, likely to help) / Low (cold)\\n- Recommended contact sequence: who to approach first based on warm-path strength and responsiveness signals\\n\\n## Research Phase 4 — Email discovery (Hunter.io, use HUNTER_API_KEY from .env)\\nStep 1: Call the Hunter.io domain-search endpoint for domain ' + _prCompanyDomain + ' with confidence_min=70 and type=personal. Parse results and match to identified contacts.\\nStep 2: For ' + _prRecruiter + ' and ' + _prHm + ' specifically, also call the Hunter.io email-finder endpoint (name + domain) to fill any gaps from domain-search.\\nStep 3: Cross-reference all email results against the Phase 1-2 roster.\\n\\n## Final synthesized report\\nSave to ~/Documents/career-ops/apply-pack/ — search for a directory containing "' + _prApplyPackSlug + '", use the first match, then save as people-research.md. If no matching directory exists, create ~/Documents/career-ops/apply-pack/' + _prApplyPackSlug + '/people-research.md.\\n\\n### Section 1 — Ranked contact list\\nTable: Name | Title | LinkedIn | Best Email (confidence %) | Warm or Cold | Priority Rank\\nOne row per identified contact, ranked by reach likelihood. Include a 1-line rationale per row.\\n\\n### Section 2 — Relationship map\\nText diagram showing my connections to intermediate nodes to the recruiter/HM. Label each path with warm-intro probability. Include the influence hierarchy for this function at ' + (d.company || '') + '.\\n\\n### Section 3 — Per-person outreach playbook\\nFor each contact in Section 1:\\n- Why this specific person — grounded in their actual public content, not generic reasons\\n- Best channel: LinkedIn DM / email / X reply — pick one and state the rationale\\n- 2-sentence personalized hook based on real published content or public activity\\n- Best time window based on posting and engagement patterns\\n\\n### Section 4 — Synthesis and first move\\n- Top recommendation: who to contact first, via which channel, with what exact opening message, and by what date\\n- Second and third moves if no response within 5 business days\\n- Key green flags or red flags from the research that should shape the outreach strategy\\n\\n## About ${isDemoMode() ? 'the demo candidate' : 'Mitchell'} (use for personalization)\\n- ${isDemoMode() ? 'Fabricated demo experience at fictional employers' : '10+ years building AI-era content and product systems at CNN, YouTube, NYT, Google'}\\n- Target roles: Applied AI Engineer / AI Program Manager / Solutions Architect at AI-native companies\\n- Shipped production AI systems; technical + GTM hybrid background\\n- LinkedIn: ${isDemoMode() ? 'linkedin.com/in/demo-candidate' : 'linkedin.com/in/mitwilli'} | GitHub: ${isDemoMode() ? 'github.com/demo-user' : 'mitwilli-create'}';
+     window.__lastPeopleResearchPrompt = _prPrompt;
+     return '<div class="pill-popover-kind">People · ' + esc(d.company || '') + '</div>'
+       + '<h4 class="pill-popover-headline">' + esc(d.role || '') + '</h4>'
+@@ -41042,7 +41111,7 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+   // at runtime via window._pillDataReadyPromise. Empty object is safe — the
+   // openPillPopover fallback path simply shows nothing.
+   try {
+-    const pillOutDir = join(ROOT, 'dashboard/data');
++    const pillOutDir = resolveDataPath('dashboard/data');
+     mkdirSync(pillOutDir, { recursive: true });
+     const pillJson = JSON.stringify(pillData);
+     // Atomic write — these artifacts are lazy-fetched by live clients; a
+@@ -41061,7 +41130,7 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+   // 2 of the page. Matched by the `window._contactsReadyPromise =
+   // fetch('/data/contacts.json')` shim in the inline script.
+   try {
+-    const contactsOutDir = join(ROOT, 'dashboard/data');
++    const contactsOutDir = resolveDataPath('dashboard/data');
+     mkdirSync(contactsOutDir, { recursive: true });
+     const contactsPayload = { contacts: contactsDirectory, stats: contactsDirectoryStats };
+     atomicWriteJson(join(contactsOutDir, 'contacts.json'), contactsPayload, { indent: 0 });
+@@ -41084,10 +41153,10 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+   // names should be added to data/enrichment-queue.json so a future
+   // network-enricher run can fill them in.
+   try {
+-    const hmDir = join(ROOT, 'data', 'hm-intel');
++    const hmDir = resolveDataPath('data/hm-intel');
+     if (existsSync(hmDir)) {
+       const hmFiles = readdirSync(hmDir).filter(f => f.endsWith('.json') && !f.startsWith('_'));
+-      const dbPath = join(ROOT, 'data', 'network-database.json');
++      const dbPath = resolveDataPath('data/network-database.json');
+       const dbNames = new Set();
+       if (existsSync(dbPath)) {
+         try {
+@@ -41178,7 +41247,7 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+     }
+   }
+ 
+-  console.log(`Open with: open dashboard/index.html`);
++  console.log(`Open with: open ${isDemoMode() ? 'dashboard/demo-index.html' : 'dashboard/index.html'}`);
+ 
+   // 2026-05-19 Mitchell post-bug-class-audit — post-build sanity check.
+   // Validates every inline <script> block in the just-written HTML parses
+@@ -41209,7 +41278,15 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+   // relationship-intelligence directory). Previously this had no scheduled
+   // hook so the file went stale and 404'd. Chaining here keeps it in sync
+   // with every dashboard rebuild. Skip with DASHBOARD_SKIP_CONTACTS=1.
+-  if (process.env.DASHBOARD_SKIP_CONTACTS !== '1') {
++  // Demo-mode note (2026-07-13): build-contacts-page.mjs / build-network-
++  // database-shell.mjs / build-article-digest.mjs (below) each resolve their
++  // OWN real-data paths independently — third-level indirection beyond the
++  // 16 lib/*.mjs modules patched for demo-mode parity. Rather than also
++  // patch 3 more standalone scripts, skip invoking them entirely in demo
++  // mode; they write real personal data straight into dashboard/*.html
++  // siblings (contacts.html, network-database.html, article-digest.html)
++  // that a demo build must never touch or regenerate.
++  if (process.env.DASHBOARD_SKIP_CONTACTS !== '1' && !isDemoMode()) {
+     const { spawnSync } = await import('node:child_process');
+     const res = spawnSync('node', [join(ROOT, 'scripts/build-contacts-page.mjs')], {
+       cwd: ROOT,
+@@ -41227,7 +41304,7 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+   // catches the case where someone hand-edits network-database.html and
+   // strips the sidebar — next build re-injects it. Skip with
+   // DASHBOARD_SKIP_NETWORK_DB_SHELL=1.
+-  if (process.env.DASHBOARD_SKIP_NETWORK_DB_SHELL !== '1') {
++  if (process.env.DASHBOARD_SKIP_NETWORK_DB_SHELL !== '1' && !isDemoMode()) {
+     const { spawnSync } = await import('node:child_process');
+     const res = spawnSync('node', [join(ROOT, 'scripts/build-network-database-shell.mjs')], {
+       cwd: ROOT,
+@@ -41243,7 +41320,7 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+   // used to point at article-digest.md (404'd because the static server doesn't
+   // expose .md from the repo root). Now points at the rendered .html which this
+   // step writes. Skip with DASHBOARD_SKIP_ARTICLE_DIGEST=1.
+-  if (process.env.DASHBOARD_SKIP_ARTICLE_DIGEST !== '1') {
++  if (process.env.DASHBOARD_SKIP_ARTICLE_DIGEST !== '1' && !isDemoMode()) {
+     const { spawnSync } = await import('node:child_process');
+     const res = spawnSync('node', [join(ROOT, 'scripts/build-article-digest.mjs'), '--quiet'], {
+       cwd: ROOT,

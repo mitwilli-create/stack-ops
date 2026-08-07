@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mitchell.career-ops.voice-corpus-grower</string>
+
+    <!--
+        Monthly voice-corpus growth scan (1st of month, 04:00 PT).
+
+        Mines additional verified-Mitchell writing samples from local sources
+        (data/linkedin/outreach/, data/apply-packs/<slug>/cover-letter.md with
+        HUMAN-EDITED-AT flag, data/cv-archives/, data/autobiography-project/)
+        and proposes them for inclusion in lib/voice-corpus.mjs via a NEEDS-
+        APPROVAL omega-proposal. Does NOT auto-edit lib/voice-corpus.mjs —
+        Mitchell-only territory per the script docstring.
+
+        Why monthly: the corpus is the load-bearing input to AI-detection
+        calibration (per Sadasivan 2023 + RAID + Liang 2023, hundreds-to-
+        thousands of human exemplars are statistically required to
+        distinguish AI from human prose). Monthly cadence gives the local
+        sources time to accumulate new authored material between runs while
+        keeping the omega-proposal queue manageable for Mitchell's review.
+
+        Cost: $0 (deterministic file walk + dedupe, no LLM calls).
+        Wall time: <30s on a typical corpus state.
+
+        SHIPPED LOADED-BUT-DISABLED 2026-05-24 awaiting Mitchell's first
+        manual `--run` to seed the workflow + verify the proposal output.
+
+        Enable AFTER reviewing first proposal:
+            launchctl enable gui/$(id -u)/com.mitchell.career-ops.voice-corpus-grower
+
+        Kill switch (runtime, no unload required):
+            launchctl setenv VOICE_CORPUS_GROWER_ENABLED false
+            # (script does NOT read this flag yet — placeholder for future hook)
+
+        First manual seed run:
+            cd ~/Documents/career-ops
+            node scripts/agents/voice-corpus-grower.mjs --run --limit 50
+            # → writes data/voice-corpus-growth-{YYYY-MM-DD}.md
+            # → appends NEEDS-APPROVAL to data/omega-proposals-{YYYY-MM-DD}.md (if exists)
+
+        Pattern F compliance — log paths MUST live under ~/Library/Logs/
+        (macOS Tahoe TCC blocks launchd writes to ~/Documents/).
+    -->
+
+        <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-lc</string>
+        <string>export NVM_DIR=&quot;$HOME/.nvm&quot;; [ -s &quot;$NVM_DIR/nvm.sh&quot; ] &amp;&amp; . &quot;$NVM_DIR/nvm.sh&quot;; exec node &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/launchd-wrapper.mjs&apos; &apos;--label=com.mitchell.career-ops.voice-corpus-grower&apos; &apos;--max-retries=0&apos; &apos;--retry-backoff-sec=60&apos; &apos;--&apos; &apos;node&apos; &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/agents/voice-corpus-grower.mjs&apos; &apos;--run&apos; &apos;--limit&apos; &apos;50&apos;</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mitchellwilliams/Documents/career-ops</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- Monthly: 1st of month, 04:00 PT.  -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Day</key>
+        <integer>1</integer>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- Log paths OUTSIDE ~/Documents/ per Sandbox finding 2026-05-21. -->
+    <key>StandardOutPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/voice-corpus-grower.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/voice-corpus-grower.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/mitchellwilliams</string>
+    </dict>
+
+    <key>AbandonProcessGroup</key>
+    <true/>
+</dict>
+</plist>

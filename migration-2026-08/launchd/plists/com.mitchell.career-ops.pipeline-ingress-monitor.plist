@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        com.mitchell.career-ops.pipeline-ingress-monitor
+
+        Cluster F2 (2026-05-21). Audits every scanner plist that feeds the
+        pipeline every 6h and writes data/pipeline-ingress-state.json.
+
+        Addresses Mitchell's foundational trust concern: "make sure all
+        content is being fed into the pipeline and being diverted into the
+        right repositories or areas of the dashboard."
+
+        StartInterval=21600s = 6 hours. One-shot per fire (KeepAlive=false),
+        so a crash doesn't enter a flap loop. Tahoe launchd-keepalive-tahoe
+        bug (Pattern F of bug-class-catalog) does NOT apply to one-shot
+        StartInterval jobs.
+
+        Output: data/pipeline-ingress-state.json — read by:
+          - Dashboard "Today's Pipeline Activity" panel (Cluster A7)
+          - Morning heartbeat email "Scanners (last 24h)" section
+          - Hygiene panel warnings on dashboard
+
+        Bootstrap (post-merge):
+          launchctl bootstrap gui/$(id -u) \\
+            scripts/launchd/com.mitchell.career-ops.pipeline-ingress-monitor.plist
+
+        Manual fire:
+          launchctl kickstart gui/$(id -u)/com.mitchell.career-ops.pipeline-ingress-monitor
+    -->
+
+    <key>Label</key>
+    <string>com.mitchell.career-ops.pipeline-ingress-monitor</string>
+
+        <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-lc</string>
+        <string>export NVM_DIR=&quot;$HOME/.nvm&quot;; [ -s &quot;$NVM_DIR/nvm.sh&quot; ] &amp;&amp; . &quot;$NVM_DIR/nvm.sh&quot;; exec node &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/launchd-wrapper.mjs&apos; &apos;--label=com.mitchell.career-ops.pipeline-ingress-monitor&apos; &apos;--max-retries=0&apos; &apos;--retry-backoff-sec=60&apos; &apos;--&apos; &apos;node&apos; &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/pipeline-ingress-monitor.mjs&apos;</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mitchellwilliams/Documents/career-ops</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StartInterval</key>
+    <integer>21600</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/pipeline-ingress-monitor.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/pipeline-ingress-monitor.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/mitchellwilliams</string>
+    </dict>
+</dict>
+</plist>

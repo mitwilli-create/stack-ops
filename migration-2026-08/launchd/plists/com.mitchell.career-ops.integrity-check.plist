@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        com.mitchell.career-ops.integrity-check
+
+        Cluster J (Reliability sensor mesh, 2026-05-21).
+
+        Runs scripts/integrity-check-nightly.mjs once nightly at 04:00 PT.
+        One-shot per day (KeepAlive=false) so a crash doesn't enter a flap
+        loop — next 04:00 will retry. StartCalendarInterval uses the
+        machine's local TZ, matching the user's PT default.
+
+        Why 04:00 and not 03:00: system-maintainer runs at 03:00 and writes
+        its outputs. integrity-check reads those outputs (plus the prior day's
+        commit log) and produces data/integrity-state.json which the dashboard
+        hygiene panel + morning heartbeat both consume.
+
+        What it produces:
+          data/integrity-state.json (canonical output, dashboard reads this)
+          data/logs/integrity-check-launchd.out (stdout — short summary)
+          data/logs/integrity-check-launchd.err (stderr — NDJSON heartbeat)
+
+        Bootstrap (after merging to main):
+            launchctl bootstrap gui/$(id -u) \
+                /Users/mitchellwilliams/Documents/career-ops/scripts/launchd/com.mitchell.career-ops.integrity-check.plist
+
+        Manual fire:
+            launchctl kickstart gui/$(id -u)/com.mitchell.career-ops.integrity-check
+
+        Tahoe note: this is a StartCalendarInterval plist (not KeepAlive), so
+        the Tahoe launchd-keepalive-tahoe bug (see ~/.claude/knowledge/brain/
+        bug-class-catalog.md Pattern F) does NOT apply — direct bootstrap is
+        sufficient, no nohup-wrapper required.
+    -->
+
+    <key>Label</key>
+    <string>com.mitchell.career-ops.integrity-check</string>
+
+        <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-lc</string>
+        <string>export NVM_DIR=&quot;$HOME/.nvm&quot;; [ -s &quot;$NVM_DIR/nvm.sh&quot; ] &amp;&amp; . &quot;$NVM_DIR/nvm.sh&quot;; exec node &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/launchd-wrapper.mjs&apos; &apos;--label=com.mitchell.career-ops.integrity-check&apos; &apos;--max-retries=0&apos; &apos;--retry-backoff-sec=60&apos; &apos;--&apos; &apos;node&apos; &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/integrity-check-nightly.mjs&apos;</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mitchellwilliams/Documents/career-ops</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/integrity-check-launchd.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/integrity-check-launchd.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/mitchellwilliams</string>
+    </dict>
+</dict>
+</plist>

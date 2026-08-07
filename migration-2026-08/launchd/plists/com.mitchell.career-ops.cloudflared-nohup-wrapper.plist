@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        com.mitchell.career-ops.cloudflared-nohup-wrapper
+
+        Workaround for the macOS Tahoe (15.x) launchd KeepAlive=true regression
+        documented in ~/.claude/knowledge/brain/bug-class-catalog.md § Pattern F.
+        The canonical cloudflared (prod) plist exits with EX_CONFIG (78) within
+        milliseconds on every spawn attempt on Tahoe. Sister wrapper to the
+        existing cloudflared-staging-nohup-wrapper.plist that solves the same
+        bug for the staging tunnel.
+
+        Fires at boot/login (RunAtLoad=true) and every 5 minutes (StartInterval),
+        shells out to scripts/launchd/cloudflared-nohup.sh which checks whether
+        a prod cloudflared (config.yml, NOT config-staging.yml) is already
+        running and if not, nohup-spawns it into a detached session. The script
+        is idempotent so the 5-minute tick is safe to fire repeatedly.
+
+        REMOVE this wrapper when Apple patches the launchd KeepAlive bug.
+
+        Bootstrap:
+            cp scripts/launchd/com.mitchell.career-ops.cloudflared-nohup-wrapper.plist \
+               ~/Library/LaunchAgents/
+            launchctl bootstrap gui/$(id -u) \
+                ~/Library/LaunchAgents/com.mitchell.career-ops.cloudflared-nohup-wrapper.plist
+    -->
+
+    <key>Label</key>
+    <string>com.mitchell.career-ops.cloudflared-nohup-wrapper</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/mitchellwilliams/.local/career-ops-wrappers/cloudflared-nohup.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mitchellwilliams</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- Crucial on macOS Tahoe: prevents launchd from killing the nohup'd
+         cloudflared child process when the wrapper script exits. Discovered
+         2026-05-21. -->
+    <key>AbandonProcessGroup</key>
+    <true/>
+
+    <!-- Recovery cadence: 5 minutes. Idempotency check inside the script
+         means this only takes action when the prod tunnel has died. -->
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <!-- Log path MUST live outside ~/Documents/ — macOS Tahoe TCC blocks
+         launchd from writing to log files under Documents (silent EX_CONFIG=78).
+         Fixed 2026-05-22 (Phase 6.5-CAD-1) — same root cause as Pattern F,
+         applies to wrapper plists too. -->
+    <key>StandardOutPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/cloudflared-nohup-wrapper.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/cloudflared-nohup-wrapper.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/mitchellwilliams</string>
+    </dict>
+</dict>
+</plist>

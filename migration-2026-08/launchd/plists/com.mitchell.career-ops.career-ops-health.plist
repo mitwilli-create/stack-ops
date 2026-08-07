@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mitchell.career-ops.career-ops-health</string>
+
+    <!--
+        Daily career-ops-health scan. Slotted at 06:30 PT — runs 30 min AFTER
+        regression-guard (06:00 PT) so the day's first health snapshot can
+        also surface any regression-guard flapping or budget-exhausted state.
+
+        SHIPPED LOADED-BUT-DISABLED 2026-05-25 awaiting Mitchell's review of
+        the first manual --dry-run + --scheduled invocation. To enable AFTER
+        reviewing first-run output:
+            launchctl enable gui/$(id -u)/com.mitchell.career-ops.career-ops-health
+
+        Kill switch (runtime, no unload required):
+            launchctl setenv CAREER_OPS_HEALTH_ENABLED false
+
+        Born 2026-05-25 via the prompt-optimizer interview chain.
+        Source-of-truth design doc:
+            data/agent-spec-career-ops-health-2026-05-25.md
+
+        Pattern F compliance — log paths MUST live under ~/Library/Logs/
+        (macOS Tahoe TCC blocks launchd writes to ~/Documents/).
+    -->
+        <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-lc</string>
+        <string>export NVM_DIR=&quot;$HOME/.nvm&quot;; [ -s &quot;$NVM_DIR/nvm.sh&quot; ] &amp;&amp; . &quot;$NVM_DIR/nvm.sh&quot;; exec node &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/launchd-wrapper.mjs&apos; &apos;--label=com.mitchell.career-ops.career-ops-health&apos; &apos;--max-retries=0&apos; &apos;--retry-backoff-sec=60&apos; &apos;--&apos; &apos;node&apos; &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/agents/career-ops-health.mjs&apos; &apos;--scheduled&apos;</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mitchellwilliams/Documents/career-ops</string>
+
+    <!-- Daily 06:30 PT. CalendarInterval Hour is local time on macOS. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>6</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <!--
+        Log paths under ~/Library/Logs/career-ops/ per AGENTS.md Pattern F
+        (Tahoe sandbox blocks /Documents). DO NOT change these to anything
+        under ~/Documents/ — silent EX_CONFIG=78 respawn loop on Tahoe.
+    -->
+    <key>StandardOutPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/career-ops-health.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/career-ops-health.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/mitchellwilliams</string>
+    </dict>
+</dict>
+</plist>

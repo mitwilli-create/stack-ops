@@ -1,0 +1,749 @@
+diff --git a/batch-runner-batches.mjs b/batch-runner-batches.mjs
+index b83717e6..d0221ec5 100644
+--- a/batch-runner-batches.mjs
++++ b/batch-runner-batches.mjs
+@@ -38,6 +38,8 @@ import { nextReportNum as sharedNextReportNum, allocateReportFile } from './lib/
+ import { isCdpAvailable, connectToChromeCDP } from './lib/cdp-browser.mjs';
+ import { renderDiscardPatternBrief } from './lib/discard-pattern-injector.mjs';
+ import { assessEvalReadability } from './lib/jd-validity.mjs';
++import { assessJdText, parseAshbyUrl } from './lib/jd-quality.mjs';
++import { fetchAshbyJD, fetchRenderedJD } from './lib/jd-fetch-strategies.mjs';
+ import { gateCompFloor, extractLocationBucket } from './lib/comp-floor-gate.mjs';
+ import { escapeTableCell, tsvSafeCell } from './lib/tracker-row.mjs';
+ import {
+@@ -476,6 +478,25 @@ const JD_TEXT_LIMIT = 12_000;
+ // [[project_cdp_attached_chrome_enrichment]]) so we read the full DOM
+ // instead of the public excerpt. Falls back to bare fetch when CDP is
+ // unavailable so the runner stays portable.
++// 2026-07-27 — append-only visibility ledger for postings we could not read.
++// Not a blocklist and not consulted for filtering: a URL in here is still
++// queued and still retried. It exists so "metacareers.com stopped rendering"
++// shows up as a countable trend rather than as silent Unknown Role reports.
++const UNREADABLE_LEDGER = join(ROOT, 'data', 'jd-unreadable-ledger.jsonl');
++function recordUnreadableJD(url, reason) {
++  try {
++    let host = '';
++    try { host = new URL(url).hostname; } catch {}
++    // A fresh clone has no data/ yet; without this the append throws ENOENT
++    // and the catch below discards the record — silently defeating the whole
++    // point of a visibility ledger.
++    mkdirSync(dirname(UNREADABLE_LEDGER), { recursive: true });
++    appendFileSync(UNREADABLE_LEDGER, JSON.stringify({
++      at: new Date().toISOString(), url, host, reason, action: 'held-for-retry',
++    }) + '\n');
++  } catch { /* visibility only — never break a batch over the ledger */ }
++}
++
+ async function fetchJD(url) {
+   const isLinkedIn = /(^|\.)linkedin\.com\//i.test(url);
+   if (isLinkedIn) {
+@@ -495,13 +516,32 @@ async function fetchJD(url) {
+           if (!wall) {
+             // Collapse whitespace for token efficiency
+             const text = bodyText.replace(/\s+/g, ' ').trim();
+-            return {
+-              ok: !dead,
+-              reason: dead ? 'dead-posting phrase via CDP DOM' : 'CDP DOM read',
+-              text: text.slice(0, JD_TEXT_LIMIT),
+-              source: 'cdp',
+-              final_url: finalUrl,
+-            };
++            // 2026-07-27 — the LinkedIn CDP branch predates the content gate
++            // and used to return ok:true on whatever the DOM held. A session
++            // that half-rendered, or an interstitial that dodged the `wall`
++            // regex, would sail through as a usable JD exactly like the Meta
++            // shell did. Apply the same check here; a thin DOM read falls
++            // through to the paths below rather than reaching the evaluator.
++            const cdpVerdict = assessJdText(text);
++            if (!dead && cdpVerdict.usable) {
++              return {
++                ok: true,
++                reason: `CDP DOM read (${cdpVerdict.words}w)`,
++                text: text.slice(0, JD_TEXT_LIMIT),
++                source: 'cdp',
++                final_url: finalUrl,
++              };
++            }
++            if (dead) {
++              return {
++                ok: false,
++                reason: 'dead-posting phrase via CDP DOM',
++                text: '',
++                source: 'cdp',
++                final_url: finalUrl,
++              };
++            }
++            // Thin DOM read — fall through to the HTTP/escalation paths.
+           }
+         } finally {
+           try { await page.close(); } catch {}
+@@ -514,6 +554,27 @@ async function fetchJD(url) {
+       // the bare-fetch body — just with a known-degraded body for LinkedIn.
+     }
+   }
++  // ── Vendor API path (2026-07-27) ────────────────────────────────────────
++  // Ashby publishes every live posting as JSON including descriptionPlain, so
++  // an Ashby URL never needs rendering. Strictly better than scraping the SPA:
++  // no browser, structured title/location, and it works headless. 11 of the 80
++  // "Unknown Role" reports were jobs.ashbyhq.com, which returns 11 words of
++  // visible text over bare HTTP.
++  // parseAshbyUrl only matches URLs naming a specific posting, so a bare board
++  // URL falls straight through to the rendering path and can never be mistaken
++  // for a closed posting and dequeued.
++  if (parseAshbyUrl(url)) {
++    const ashby = await fetchAshbyJD(url);
++    if (ashby.ok) {
++      return { ok: true, reason: ashby.reason, text: ashby.text.slice(0, JD_TEXT_LIMIT), source: 'ashby-api' };
++    }
++    // The board lists live jobs and this posting is not among them — it closed.
++    if (/none match this URL/i.test(ashby.reason || '')) {
++      return { ok: false, reason: ashby.reason, text: '', terminal: true };
++    }
++    // Otherwise fall through and let the generic paths try.
++  }
++
+   // Bare HTTP path (non-LinkedIn URLs, or LinkedIn fallback if CDP failed)
+   const { live, reason, body } = await checkUrl(url, { timeoutMs: LIVENESS_TIMEOUT_MS });
+   // `live === false` is liveness-core's `expired` verdict — a TERMINAL judgment
+@@ -526,7 +587,48 @@ async function fetchJD(url) {
+   // batch round drained 0, tripped the "no drain detected" early break, and the
+   // whole drain controller halted with the queue permanently non-empty.
+   if (live === false) return { ok: false, reason, text: '', terminal: true };
+-  return { ok: true, reason: reason || 'live', text: (body || '').slice(0, JD_TEXT_LIMIT), source: 'http' };
++
++  // ── JD content gate (2026-07-27) ────────────────────────────────────────
++  // HTTP 200 is not the same as "we have a job description". metacareers.com
++  // returns 387KB of HTML carrying 12 visible characters ("Meta Careers"), and
++  // this function used to hand that straight to the evaluator as a usable JD.
++  // The prompt then substituted "(JD unavailable — evaluate from URL and
++  // company context only)" and the model wrote a confident stub titled
++  // "Meta — Unknown Role (Job ID …)". That is how 80 unreadable reports and
++  // 300 JD-unavailable evals reached the queue; report 3459 was really
++  // "Lead, Product Content Engineering", a role squarely in Mitchell's lane.
++  const httpText = (body || '').slice(0, JD_TEXT_LIMIT);
++  const httpVerdict = assessJdText(httpText);
++  if (httpVerdict.usable) {
++    return { ok: true, reason: reason || 'live', text: httpText, source: 'http' };
++  }
++
++  // Escalate to a real browser. Known client-rendered hosts skip straight here
++  // on the next run, but ANY host that comes back thin gets the same second
++  // chance — the list of SPA careers sites is not knowable in advance.
++  const rendered = await fetchRenderedJD(url, { isCdpAvailable, connectToChromeCDP });
++  if (rendered.ok) {
++    return {
++      ok: true,
++      reason: `${rendered.reason} (HTTP body was unusable: ${httpVerdict.reason})`,
++      text: rendered.text.slice(0, JD_TEXT_LIMIT),
++      source: 'cdp',
++    };
++  }
++
++  // Still nothing readable. This is a FETCH FAILURE, not a JD — refuse to
++  // submit it for evaluation. Deliberately NON-terminal: the posting is live
++  // (liveness said so), we simply could not read it, so it stays queued for a
++  // later attempt. Nothing is dropped, dequeued, or discarded on these grounds
++  // — a company must never fall out of the search because its site is hard to
++  // scrape.
++  return {
++    ok: false,
++    reason: `unreadable JD — ${httpVerdict.reason}; browser retry: ${rendered.reason}`,
++    text: '',
++    terminal: false,
++    unreadable: true,
++  };
+ }
+ 
+ // ── Triage-advance reader ─────────────────────────────────────────
+@@ -815,10 +917,14 @@ async function phaseSubmit(apiKey) {
+     const item = items[i];
+     process.stdout.write(`  [${i + 1}/${items.length}] Fetching JD: ${item.url.slice(0, 60)}…`);
+ 
+-    const { ok, reason, text, terminal } = await fetchJD(item.url);
++    const { ok, reason, text, terminal, unreadable } = await fetchJD(item.url);
+     if (!ok) {
+       process.stdout.write(` ❌ ${reason} — skipping\n`);
+       fetchErrors++;
++      // 2026-07-27 — record unreadable-JD holds so a host that silently stops
++      // rendering is visible as a trend instead of an invisible drip. These
++      // are NOT discards: the URL stays queued and is retried next run.
++      if (unreadable) recordUnreadableJD(item.url, reason);
+       // `terminal` is the authoritative liveness verdict when fetchJD supplies
+       // one; the reason-regex below remains as a fallback for the CDP path,
+       // which reports its own dead-posting string without a liveness verdict.
+diff --git a/lib/jd-validity.mjs b/lib/jd-validity.mjs
+index da4ad399..7de0408f 100644
+--- a/lib/jd-validity.mjs
++++ b/lib/jd-validity.mjs
+@@ -65,6 +65,14 @@ const UNREADABLE_PATTERNS = [
+   // dash-led explanation: "Unknown", "Unknown — JD did not render",
+   // "Unknown (JD failed to render ...)". A genuine title is never just this.
+   /^\s*unknown\b\s*(?:[—–-]|\(|$)/i,
++  // "Unknown Role (Job ID 913291185113227)" — added 2026-07-27. The pattern
++  // above requires a dash, paren or end-of-field immediately after "Unknown",
++  // so the far more common "Unknown Role …" form slipped through and reached
++  // the queue. Report 3459 was filed under exactly this title while the real
++  // posting was "Lead, Product Content Engineering" at Meta. Anchored to the
++  // start of the field and limited to the four nouns the model actually
++  // emits, so a real title merely containing the word "unknown" is untouched.
++  /^\s*unknown\s+(?:role|position|title|job)\b/i,
+   // Explicit content-missing reports
+   /\bundetermined\s+from\s+jd\b/i,
+   /\bno\s+jd\s+content\b/i,
+diff --git a/providers/teamtailor.mjs b/providers/teamtailor.mjs
+new file mode 100644
+index 00000000..f98866e8
+--- /dev/null
++++ b/providers/teamtailor.mjs
+@@ -0,0 +1,99 @@
++/**
++ * providers/teamtailor.mjs — Teamtailor ATS provider for scan.mjs.
++ *
++ * Added 2026-07-27 while fixing 14 dead boards. Lindy's board had been
++ * configured as Ashby (`jobs.ashbyhq.com/lindy`), which 404s — they are
++ * actually on Teamtailor at `lindy.na.teamtailor.com`. Without a provider for
++ * it there was no way to express that in portals.yml, so the company would
++ * have stayed unsearched no matter how the entry was written.
++ *
++ * Careful: a plain-name slug guess is dangerous here. `recruitee.com/lindy`
++ * resolves to Lindy Elektronik, a German office-products company whose board
++ * is full of Mannheim sales roles. Board URLs must come from the company's own
++ * careers page, never from a name guess. The Teamtailor subdomain carries a
++ * REGION segment (`na.`, `eu.`) that is part of the address, which is why this
++ * matches the full host rather than reconstructing it from a slug.
++ *
++ * Feed: https://{sub}.{region}.teamtailor.com/jobs.json
++ * JSON Feed v1 shape:
++ *   { version, title, items: [{ id, title, url, date_published, content_html,
++ *     _jobposting: { jobLocation: [{ address: { addressLocality, ... } }] } }] }
++ *
++ * Provider contract:
++ *   id: 'teamtailor'
++ *   detect(entry): {url} | null
++ *   fetch(entry, ctx): [{title, url, company, location}]
++ */
++
++import { makeHttpCtx } from './_http.mjs';
++
++// Host, including the region segment when present: lindy.na.teamtailor.com
++// Anchored, and matched against a parsed hostname rather than raw URL text —
++// a loose match would accept teamtailor-looking strings appearing anywhere in
++// a URL (a query parameter, a path segment on someone else's domain).
++const TEAMTAILOR_HOST_RE = /^(?:[a-z0-9-]+\.){1,2}teamtailor\.com$/i;
++
++function extractHost(entry) {
++  for (const url of [entry.api || '', entry.careers_url || '']) {
++    if (!url) continue;
++    try {
++      const host = new URL(url).hostname.toLowerCase();
++      if (TEAMTAILOR_HOST_RE.test(host)) return host;
++    } catch {
++      // Not a parseable URL — try the next configured field.
++    }
++  }
++  return null;
++}
++
++function buildFeedUrl(host) {
++  return `https://${host}/jobs.json`;
++}
++
++/** Pull a readable location out of the embedded schema.org JobPosting. */
++function locationOf(item) {
++  const places = item?._jobposting?.jobLocation;
++  if (!Array.isArray(places) || !places.length) return '';
++  const parts = places
++    .map(p => {
++      const a = p?.address || {};
++      return [a.addressLocality, a.addressRegion, a.addressCountry].filter(Boolean).join(', ');
++    })
++    .filter(Boolean);
++  return [...new Set(parts)].join(' / ');
++}
++
++const teamtailor = {
++  id: 'teamtailor',
++
++  detect(entry) {
++    const host = extractHost(entry);
++    return host ? { url: buildFeedUrl(host) } : null;
++  },
++
++  async fetch(entry, ctx = makeHttpCtx()) {
++    const host = extractHost(entry);
++    if (!host) throw new Error(`teamtailor: cannot determine board host for "${entry.name}"`);
++    const company = entry.name || 'Unknown';
++    const url = buildFeedUrl(host);
++
++    const res = await ctx.fetch(url, {
++      signal: AbortSignal.timeout(ctx.timeoutMs || 8000),
++      headers: { ...ctx.headers, 'Accept': 'application/json' },
++    });
++    if (!res.ok) throw new Error(`teamtailor: HTTP ${res.status} from ${url}`);
++
++    const data = await res.json();
++    const items = Array.isArray(data?.items) ? data.items : [];
++    return items
++      .filter(it => it && it.title && it.url)
++      .map(it => ({
++        title: it.title,
++        url: it.url,
++        company,
++        location: locationOf(it),
++      }));
++  },
++};
++
++export default teamtailor;
+diff --git a/providers/workable.mjs b/providers/workable.mjs
+index 58d07650..85472719 100644
+--- a/providers/workable.mjs
++++ b/providers/workable.mjs
+@@ -17,7 +17,7 @@
+ 
+ import { makeHttpCtx } from './_http.mjs';
+ 
+-const WORKABLE_APPLY_RE  = /apply\.workable\.com\/(?:api\/v3\/accounts\/)?([\w-]+)/i;
++const WORKABLE_APPLY_RE  = /apply\.workable\.com\/(?:api\/v\d+\/(?:widget\/)?accounts\/)?([\w-]+)/i;
+ const WORKABLE_SUBDOMAIN_RE = /([\w-]+)\.workable\.com/i;
+ 
+ const MAX_PAGES = 10;
+@@ -32,11 +32,39 @@ function extractBoard(entry) {
+   return null;
+ }
+ 
++// ENDPOINT HISTORY (2026-07-27) — the v3 accounts path this provider used
++// now returns HTTP 404 for every board tested, so both Workable companies in
++// portals.yml had been scanning zero jobs. A throwing provider prints one ✗
++// line in a 36-line scan log, which is why it went unnoticed:
++//   Hugging Face  v3 → 404,  v1 widget → 7 jobs
++//   Semios        v3 → 404,  v1 widget → 20 jobs
++// The widget endpoint is the one apply.workable.com itself calls. v3 is kept
++// as a fallback rather than deleted — it is the documented endpoint and may
++// still serve boards we have not tested, so this breaks only if BOTH die.
++function buildWidgetUrl(board) {
++  return `https://apply.workable.com/api/v1/widget/accounts/${board}`;
++}
++
+ function buildApiUrl(board, cursor = null) {
+   const base = `https://apply.workable.com/api/v3/accounts/${board}/jobs`;
+   return cursor ? `${base}?cursor=${encodeURIComponent(cursor)}` : base;
+ }
+ 
++/** v1 widget rows: flat city/state/country, no publish-state field. */
++function parseWidgetJobs(jobs, companyName, board) {
++  return jobs.map(job => {
++    const location = [job.city, job.state, job.country].filter(Boolean).join(', ')
++      || (job.telecommuting ? 'Remote' : '');
++    return {
++      title: job.title || '',
++      url: job.url || job.shortlink || job.application_url
++        || `https://apply.workable.com/${board}/j/${job.shortcode}`,
++      company: companyName,
++      location,
++    };
++  });
++}
++
+ /**
+  * Workable API response shape (v3):
+  *   { results: [{ id, title, shortcode, url, location: { city, country, region }, state }],
+@@ -68,7 +96,7 @@ const workable = {
+       WORKABLE_SUBDOMAIN_RE.test(apiUrl) || WORKABLE_SUBDOMAIN_RE.test(careersUrl)
+     ) {
+       const board = extractBoard(entry);
+-      return board ? { url: buildApiUrl(board) } : null;
++      return board ? { url: buildWidgetUrl(board) } : null;
+     }
+     return null;
+   },
+@@ -76,32 +104,59 @@ const workable = {
+   async fetch(entry, ctx = makeHttpCtx()) {
+     const board = extractBoard(entry);
+     if (!board) throw new Error(`workable: cannot determine board slug for "${entry.name}"`);
++    const company = entry.name || 'Unknown';
++    const errors = [];
+ 
+-    const allJobs = [];
+-    let cursor = null;
+-    let pages = 0;
+-
+-    while (pages < MAX_PAGES) {
+-      const url = buildApiUrl(board, cursor);
++    // 1) Widget endpoint — what apply.workable.com itself calls. One response,
++    //    no cursor, published jobs only.
++    try {
++      const url = buildWidgetUrl(board);
+       const res = await ctx.fetch(url, {
+         signal: AbortSignal.timeout(ctx.timeoutMs || 8000),
+         headers: { ...ctx.headers, 'Accept': 'application/json' },
+       });
+-
+-      if (!res.ok) {
+-        throw new Error(`workable: HTTP ${res.status} from ${url}`);
++      if (res.ok) {
++        const data = await res.json();
++        const jobs = Array.isArray(data?.jobs) ? data.jobs : [];
++        if (jobs.length) return parseWidgetJobs(jobs, company, board);
++        errors.push('v1 widget returned 0 jobs');
++      } else {
++        errors.push(`v1 widget HTTP ${res.status}`);
+       }
++    } catch (err) {
++      errors.push(`v1 widget ${err?.message || err}`);
++    }
+ 
+-      const data = await res.json();
+-      const results = Array.isArray(data?.results) ? data.results : [];
+-      allJobs.push(...parseJobs(results, entry.name || 'Unknown'));
+-
+-      cursor = data?.next_page || null;
+-      pages++;
+-      if (!cursor) break;
++    // 2) Documented v3 endpoint, paginated. Kept so a board that only serves
++    //    v3 still scans.
++    const allJobs = [];
++    try {
++      let cursor = null;
++      let pages = 0;
++      while (pages < MAX_PAGES) {
++        const url = buildApiUrl(board, cursor);
++        const res = await ctx.fetch(url, {
++          signal: AbortSignal.timeout(ctx.timeoutMs || 8000),
++          headers: { ...ctx.headers, 'Accept': 'application/json' },
++        });
++        if (!res.ok) { errors.push(`v3 HTTP ${res.status}`); break; }
++        const data = await res.json();
++        const results = Array.isArray(data?.results) ? data.results : [];
++        allJobs.push(...parseJobs(results, company));
++        cursor = data?.next_page || null;
++        pages++;
++        if (!cursor) break;
++      }
++      if (!allJobs.length) errors.push('v3 returned 0 jobs');
++    } catch (err) {
++      errors.push(`v3 ${err?.message || err}`);
+     }
++    if (allJobs.length) return allJobs;
+ 
+-    return allJobs;
++    // Both endpoints failed. Throw so the board is reported as BROKEN rather
++    // than counted as a company with genuinely no open roles — that silent
++    // conflation is exactly what hid this for as long as it lasted.
++    throw new Error(`workable: no jobs for board "${board}" (${errors.join('; ')})`);
+   },
+ };
+ 
+diff --git a/scan.mjs b/scan.mjs
+index 84540c3a..d42df540 100644
+--- a/scan.mjs
++++ b/scan.mjs
+@@ -25,7 +25,7 @@
+  *   node scan.mjs --company Cohere # scan a single company
+  */
+ 
+-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, readdirSync } from 'fs';
++import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, readdirSync, renameSync } from 'fs';
+ import { pathToFileURL, fileURLToPath } from 'url';
+ import path from 'path';
+ import yaml from 'js-yaml';
+@@ -79,6 +79,146 @@ async function loadProviders(dir) {
+   return providers;
+ }
+ 
++// ── Board health ────────────────────────────────────────────────────
++// Why this exists (2026-07-27): 14 of the tracked boards were returning HTTP
++// 404 because their ATS slug or endpoint had changed, and the scan reported
++// each as one ✗ line inside a 36-line log that ends with an encouraging
++// "Total jobs found: 5618". Nobody reads line 22 of a successful run. Those
++// companies — Hugging Face and Runway among them — had been contributing zero
++// jobs for an unknown number of scans.
++//
++// A dead board and a company with genuinely no openings are indistinguishable
++// from a single run: both produce no offers. What separates them is DURATION.
++// So this records every company's outcome per scan and counts consecutive
++// scans with no jobs, which turns silent rot into a number that grows.
++//
++// It only reports. Nothing is auto-disabled — a company must never drop out of
++// the search because its careers site changed shape.
++const BOARD_HEALTH_FILE = 'data/board-health.json';
++const ZERO_STREAK_ALERT = 3;   // consecutive empty scans before we call it suspect
++
++function recordBoardHealth(outcomes, { dryRun = false } = {}) {
++  let prior = {};
++  // If the history is unreadable we must NOT fall back to an empty object and
++  // then write it — that silently destroys every streak and last-seen date,
++  // resetting the very evidence that distinguishes a board dead for months
++  // from one empty today. Fail closed: keep the file, skip the write.
++  let loadFailed = false;
++  try {
++    if (existsSync(BOARD_HEALTH_FILE)) {
++      const parsed = JSON.parse(readFileSync(BOARD_HEALTH_FILE, 'utf8'));
++      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
++        throw new Error('expected a JSON object');
++      }
++      prior = parsed;
++    }
++  } catch (err) {
++    loadFailed = true;
++    console.error(`⚠️  could not read board-health.json — preserving the existing file: ${err.message}`);
++  }
++
++  const now = new Date().toISOString();
++  const next = { ...prior };
++  const broken = [];
++  const stale = [];
++  const regressed = [];
++
++  // Several companies have more than one portals.yml entry — typically a live
++  // ATS entry plus a websearch stub pointing at the human careers page. Board
++  // health is keyed by company NAME, so those siblings collide: the stub is
++  // unmatched, sees the provider the live entry just stored, and reports a
++  // regression for a company that is being scanned perfectly well. That fired
++  // 11 false positives on the second run. If ANY entry for a company resolved
++  // to a provider this run, its unmatched siblings are not news.
++  const matchedCompanies = new Set(outcomes.filter(o => !o.unmatched).map(o => o.company));
++  const effective = outcomes.filter(o => !(o.unmatched && matchedCompanies.has(o.company)));
++
++  for (const o of effective) {
++    const was = prior[o.company] || { zero_streak: 0, last_jobs_at: null, last_jobs: 0 };
++    const healthy = !o.error && o.jobs > 0;
++    // A company that resolved to a real provider before and matches none now
++    // has regressed — its careers_url changed shape, or a detect() stopped
++    // recognising it. Silent config drift, which is the same failure class as
++    // a dead slug.
++    // Retain the last known-good provider while a company is unmatched.
++    // Overwriting it with 'none' would make the regression fire once and then
++    // go silent forever, because the next run would see no prior provider to
++    // compare against — a self-erasing alarm, which is worse than no alarm.
++    const unmatchedStreak = o.unmatched ? (was.unmatched_streak || 0) + 1 : 0;
++    const knownProvider = was.provider && was.provider !== 'none' ? was.provider : null;
++    if (o.unmatched && knownProvider) {
++      regressed.push({ ...o, was_provider: knownProvider, last_jobs_at: was.last_jobs_at, streak: unmatchedStreak });
++    }
++    const rec = {
++      provider: o.unmatched ? (knownProvider || 'none') : o.provider,
++      last_checked: now,
++      last_jobs: healthy ? o.jobs : was.last_jobs || 0,
++      last_jobs_at: healthy ? now : was.last_jobs_at || null,
++      last_error: o.error || null,
++      zero_streak: healthy ? 0 : (was.zero_streak || 0) + 1,
++      unmatched_streak: unmatchedStreak,
++    };
++    next[o.company] = rec;
++    if (o.error) broken.push({ ...o, streak: rec.zero_streak, last_jobs_at: rec.last_jobs_at });
++    else if (!o.unmatched && o.jobs === 0 && rec.zero_streak >= ZERO_STREAK_ALERT) {
++      stale.push({ ...o, streak: rec.zero_streak, last_jobs_at: rec.last_jobs_at });
++    }
++  }
++
++  if (!dryRun && !loadFailed) {
++    try {
++      mkdirSync(path.dirname(BOARD_HEALTH_FILE), { recursive: true });
++      // Write-then-rename. A crash or a full disk partway through a direct
++      // write leaves truncated JSON, and the corruption guard above would then
++      // refuse to write ever again — the history would be frozen at the moment
++      // it broke, silently. rename() within a directory is atomic.
++      const tmp = `${BOARD_HEALTH_FILE}.tmp-${process.pid}`;
++      writeFileSync(tmp, JSON.stringify(next, null, 2));
++      renameSync(tmp, BOARD_HEALTH_FILE);
++    } catch (err) {
++      console.error(`⚠️  could not write board-health.json — ${err.message}`);
++    }
++  }
++  return { broken, stale, regressed };
++}
++
++function reportBoardHealth({ broken, stale, regressed = [] }, noFeed = []) {
++  if (!broken.length && !stale.length && !noFeed.length && !regressed.length) return;
++  const ago = (iso) => {
++    if (!iso) return 'never';
++    const d = Math.floor((Date.now() - Date.parse(iso)) / 86400000);
++    return Number.isFinite(d) ? `${d}d ago` : 'unknown';
++  };
++  console.log(`\n${'━'.repeat(60)}`);
++  console.log(`⚠️  BOARDS RETURNING NOTHING — these companies are NOT being searched`);
++  console.log(`${'━'.repeat(60)}`);
++  if (broken.length) {
++    console.log(`\nBroken (${broken.length}) — the endpoint errored:`);
++    for (const b of broken) {
++      console.log(`  ✗ ${b.company} [${b.provider}] — ${String(b.error).slice(0, 90)}`);
++      console.log(`      last returned jobs: ${ago(b.last_jobs_at)} · empty for ${b.streak} scan(s)`);
++    }
++  }
++  if (stale.length) {
++    console.log(`\nSuspect (${stale.length}) — fetched fine but empty ${ZERO_STREAK_ALERT}+ scans running:`);
++    for (const s of stale) {
++      console.log(`  ⚠ ${s.company} [${s.provider}] — empty for ${s.streak} scan(s), last had jobs ${ago(s.last_jobs_at)}`);
++    }
++  }
++  if (regressed.length) {
++    console.log(`\nRegressed (${regressed.length}) — resolved to a provider before, matches none now:`);
++    for (const r of regressed) {
++      console.log(`  ⚠ ${r.company} — was [${r.was_provider}], unmatched for ${r.streak} scan(s), last had jobs ${ago(r.last_jobs_at)}; check careers_url in portals.yml`);
++    }
++  }
++  if (noFeed.length) {
++    console.log(`\nNo public feed (${noFeed.length}) — confirmed unscannable, needs a scraper or a manual check:`);
++    for (const n of noFeed) console.log(`  · ${n.company} — ${n.reason}`);
++  }
++  console.log(`\nFix: confirm the board slug at the company's careers page, then update`);
++  console.log(`portals.yml. History: data/board-health.json`);
++}
++
+ // Resolve which provider handles a tracked_companies entry.
+ // 1. Explicit `provider:` field wins (skips detect()).
+ // 2. Otherwise each provider's detect() runs in load order; first hit wins.
+@@ -325,6 +465,8 @@ async function main() {
+   const targets = [];
+   let skippedCount = 0;
+   const resolveErrors = [];
++  const noFeedCompanies = [];
++  const unresolved = [];
+   for (const company of companies) {
+     if (company.enabled === false) continue;
+     if (typeof company.name !== 'string' || !company.name) {
+@@ -332,9 +474,42 @@ async function main() {
+       continue;
+     }
+     if (filterCompany && !company.name.toLowerCase().includes(filterCompany)) continue;
++    // 2026-07-27 — `no_public_feed: true` marks a company we have CONFIRMED
++    // publishes no machine-readable board (custom careers app, or acquired and
++    // hiring moved). Without this they retry a known-dead endpoint every run
++    // and sit in the error list forever, which trains the eye to ignore that
++    // list — the same blindness that let 14 boards rot. They are not dropped:
++    // they are reported in their own board-health section so the decision to
++    // build a scraper (or drop them) stays visible and deliberate.
++    // Strict `=== true`: YAML can hand back the string "false", which is
++    // truthy, and silently un-scanning a company is the failure mode this
++    // whole change exists to remove.
++    if (company.no_public_feed === true) {
++      noFeedCompanies.push({ company: company.name, reason: company.feed_note || 'no public feed' });
++      continue;
++    }
+     const resolved = resolveProvider(company, providers);
+-    if (!resolved) { skippedCount++; continue; }
+-    if (resolved.error) { resolveErrors.push({ company: company.name, error: resolved.error }); continue; }
++    if (!resolved) {
++      // No provider matched. Most of these are websearch-only entries whose
++      // careers_url is a human page — that is config by design, and listing
++      // all ~57 as broken every run would rebuild the very noise this change
++      // removes. But a company that USED to resolve and now does not has
++      // regressed (someone edited the URL, or a provider's detect() changed),
++      // and that must be visible. So: record every one so history exists, and
++      // let the reporter surface only the regressions by comparing against
++      // the provider stored last time.
++      skippedCount++;
++      unresolved.push({ company: company.name, provider: 'none', jobs: 0, error: null, unmatched: true });
++      continue;
++    }
++    if (resolved.error) {
++      // A misconfigured `provider:` never reaches the fetch loop, so without
++      // this the company would be absent from board health entirely — the
++      // exact blind spot this tracking exists to close.
++      resolveErrors.push({ company: company.name, error: resolved.error });
++      unresolved.push({ company: company.name, provider: company.provider || '?', jobs: 0, error: resolved.error });
++      continue;
++    }
+     targets.push({ ...company, _provider: resolved.provider });
+   }
+ 
+@@ -353,6 +528,9 @@ async function main() {
+   let totalDupes = 0;
+   const newOffers = [];
+   const errors = [...resolveErrors];
++  // 2026-07-27 — per-company outcome, so a board that stops returning jobs is
++  // a tracked event rather than an absence. See recordBoardHealth().
++  const boardOutcomes = [...unresolved];
+ 
+   const tasks = targets.map(company => async () => {
+     const provider = company._provider;
+@@ -363,6 +541,7 @@ async function main() {
+         throw new Error(`${provider.id}: fetch() did not return an array`);
+       }
+       totalFound += jobs.length;
++      boardOutcomes.push({ company: company.name, provider: provider.id, jobs: jobs.length, error: null });
+ 
+       for (const job of jobs) {
+         if (!titleFilter(job.title)) {
+@@ -390,7 +569,12 @@ async function main() {
+         newOffers.push({ ...job, source: `${provider.id}-api` });
+       }
+     } catch (err) {
+-      errors.push({ company: company.name, error: err.message });
++      // Normalise: a thrown string or plain object leaves err.message
++      // undefined, which is falsy — recordBoardHealth would then read the
++      // outcome as healthy-but-empty rather than broken.
++      const message = err instanceof Error ? err.message : String(err);
++      errors.push({ company: company.name, error: message });
++      boardOutcomes.push({ company: company.name, provider: provider?.id || '?', jobs: 0, error: message });
+     }
+   });
+ 
+@@ -420,6 +604,12 @@ async function main() {
+     }
+   }
+ 
++  // Board health last, so the loudest thing on screen at the end of a run is
++  // the list of companies that are silently not being searched.
++  // A --company run sees only one board, so persisting from it would advance
++  // last_checked for that company off a partial picture. Report, don't record.
++  reportBoardHealth(recordBoardHealth(boardOutcomes, { dryRun: dryRun || Boolean(filterCompany) }), noFeedCompanies);
++
+   if (newOffers.length > 0) {
+     console.log('\nNew offers:');
+     for (const o of newOffers) {
+diff --git a/triage.mjs b/triage.mjs
+index a9150d71..db8fc370 100644
+--- a/triage.mjs
++++ b/triage.mjs
+@@ -37,6 +37,7 @@ import { logCost as _logRollingCost } from './lib/rolling-spend.mjs';
+ import { readCached, poolMap } from './lib/fetch-utils.mjs';
+ import { guessCompany, buildCompanyMatcher, extractRoleFromUrl } from './lib/ats-utils.mjs';
+ import { checkUrl } from './lib/http-liveness.mjs';
++import { assessJdText } from './lib/jd-quality.mjs';
+ import { renderDiscardPatternBrief } from './lib/discard-pattern-injector.mjs';
+ import { scoreZombie } from './lib/zombie-scorer.mjs';
+ import { detectSurfaceAlias } from './lib/surface-alias-detector.mjs';
+@@ -1057,7 +1058,23 @@ async function main() {
+       // + LLM decision=SKIP) and always gets a full eval. Liveness (dead) + the
+       // zombie gate above still apply — those are posting-VALIDITY gates, not fit
+       // judgments (a dead posting can't be applied to regardless of a save).
+-      const neverSkip = isSavedOrigin && SAVED_CFG.neverSkipAtTriage;
++      // 2026-07-27 — never skip a role on evidence we failed to fetch.
++      // Triage scores the bare-HTTP body. On a client-rendered careers site
++      // that body is a shell (metacareers.com yields the 12 characters
++      // "Meta Careers"), so the model scores with no responsibilities to
++      // judge. For a famous employer that produced a confident 4.8 and an
++      // "Unknown Role" report; for a less recognisable one the same missing
++      // evidence produces a LOW score and a silent SKIP — a real role lost
++      // because its site is hard to scrape, which is the more costly half of
++      // this bug and the invisible one.
++      //
++      // So an unreadable body forces the ADVANCE path, exactly like the
++      // saved-origin rescue below. Full evaluation then re-fetches through
++      // the Ashby API / CDP ladder in batch-runner-batches.mjs and scores the
++      // real posting. Advancing costs one eval; skipping costs the role.
++      const jdVerdict = assessJdText(body || '');
++      const unreadableJd = !jdVerdict.usable;
++      const neverSkip = (isSavedOrigin && SAVED_CFG.neverSkipAtTriage) || unreadableJd;
+ 
+       if (score === null) {
+         console.log(`⚠️  score failed (${scoreReason}) → advancing cautiously`);
+@@ -1082,7 +1099,15 @@ async function main() {
+         // on fit but was rescued by the save, log it (both to the console and the
+         // NDJSON telemetry) so the override is auditable, then fall through to the
+         // normal ADVANCE path (L5 alias check + writeAdvance) below.
+-        if (neverSkip && (hardSkip || score < threshold || decision === 'SKIP')) {
++        if (unreadableJd && (hardSkip || score < threshold || decision === 'SKIP')) {
++          console.log(`📄 ${score.toFixed(1)}/5 [${archetype}] → unreadable-JD never-skip ADVANCE (${jdVerdict.reason}) — full eval will re-fetch via browser/API`);
++        }
++        // Gate the saved-origin audit event on the saved-origin condition
++        // alone. Folding unreadable-JD rescues into it would file them under
++        // 'saved-origin-never-skip' in the telemetry and overstate how often
++        // a LinkedIn save rescued a role.
++        const savedOriginRescue = isSavedOrigin && SAVED_CFG.neverSkipAtTriage;
++        if (savedOriginRescue && (hardSkip || score < threshold || decision === 'SKIP')) {
+           const wouldBe = hardSkip
+             ? `hard-disqualifier: ${hardDqViolations.join(', ')}`
+             : score < threshold

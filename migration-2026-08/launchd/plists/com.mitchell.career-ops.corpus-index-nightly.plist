@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        com.mitchell.career-ops.corpus-index-nightly
+
+        Cluster H (Local embedding index, 2026-05-21). Fires nightly at
+        01:00 PT to incrementally re-embed any changed corpus file.
+
+        Sources walked (per scripts/build-corpus-index.mjs):
+          cv.md, article-digest.md
+          corpus/**/*.{md,txt}
+          writing-samples/*.md (except README.md)
+          ~/.claude/knowledge/brain/*.md
+          data/hm-intel/*.json (except _*.json)
+          reports/*.md
+          apply-pack/*/*.md (except tailored-cv.md — dup with cv chunks)
+          interview-prep/*.md
+
+        Incremental — only re-embeds files whose SHA changed. Typical
+        nightly run: <$0.05 (OpenAI text-embedding-3-small at $0.02/1M
+        tokens). First full run: ~$0.15-0.50 depending on corpus size.
+
+        Log paths live OUTSIDE ~/Documents/ per the 2026-05-21 Sandbox
+        finding (xpcproxy can't write to plist StandardOut/ErrorPath under
+        ~/Documents/ on macOS Tahoe — see commit 3d426fe for scrape-frequent).
+        Script path stays under Documents because it's invoked via NODE_BIN
+        (already TCC-granted), not /bin/bash.
+
+        Bootstrap (post-merge):
+          mkdir -p ~/Library/Logs/career-ops
+          launchctl bootstrap gui/$(id -u) \\
+            scripts/launchd/com.mitchell.career-ops.corpus-index-nightly.plist
+          launchctl kickstart gui/$(id -u)/com.mitchell.career-ops.corpus-index-nightly
+            # one-time seed if you haven't already fired build-corpus-index.mjs manually
+    -->
+
+    <key>Label</key>
+    <string>com.mitchell.career-ops.corpus-index-nightly</string>
+
+        <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-lc</string>
+        <string>export NVM_DIR=&quot;$HOME/.nvm&quot;; [ -s &quot;$NVM_DIR/nvm.sh&quot; ] &amp;&amp; . &quot;$NVM_DIR/nvm.sh&quot;; exec node &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/launchd-wrapper.mjs&apos; &apos;--label=com.mitchell.career-ops.corpus-index-nightly&apos; &apos;--max-retries=0&apos; &apos;--retry-backoff-sec=60&apos; &apos;--&apos; &apos;node&apos; &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/build-corpus-index.mjs&apos;</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mitchellwilliams/Documents/career-ops</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>1</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- Log paths OUTSIDE ~/Documents/ per Sandbox finding 2026-05-21. -->
+    <key>StandardOutPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/corpus-index-nightly.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/corpus-index-nightly.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/mitchellwilliams</string>
+    </dict>
+</dict>
+</plist>

@@ -1,0 +1,17 @@
+diff --git a/.claude/launch.json b/.claude/launch.json
+index 1a0fa84..920dd1d 100644
+--- a/.claude/launch.json
++++ b/.claude/launch.json
+@@ -13,6 +13,12 @@
+       "runtimeArgs": [".claude/serve.mjs"],
+       "port": 8990,
+       "autoPort": true
++    },
++    {
++      "name": "monolith",
++      "runtimeExecutable": "npm",
++      "runtimeArgs": ["start", "--prefix", "/Users/mitchellwilliams/Documents/monolith"],
++      "port": 4600
+     }
+   ]
+ }

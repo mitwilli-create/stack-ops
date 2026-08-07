@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Disabled</key>
+	<false/>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/Users/mitchellwilliams</string>
+		<key>IDEA_ROUTINE_ENABLED</key>
+		<string>true</string>
+		<key>PATH</key>
+		<string>/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+	</dict>
+	<key>Label</key>
+	<string>com.mitchell.career-ops.idea-action-routine</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/zsh</string>
+		<string>-lc</string>
+		<string>export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] &amp;&amp; . "$NVM_DIR/nvm.sh"; exec node '/Users/mitchellwilliams/Documents/career-ops/scripts/launchd-wrapper.mjs' '--label=com.mitchell.career-ops.idea-action-routine' '--max-retries=0' '--retry-backoff-sec=60' '--' 'node' '/Users/mitchellwilliams/Documents/career-ops/scripts/idea-action-routine.mjs' '--apply' '--scheduled'</string>
+	</array>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardErrorPath</key>
+	<string>/Users/mitchellwilliams/Library/Logs/career-ops/idea-action-routine.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/mitchellwilliams/Library/Logs/career-ops/idea-action-routine.log</string>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>4</integer>
+		<key>Minute</key>
+		<integer>30</integer>
+		<key>Weekday</key>
+		<integer>0</integer>
+	</dict>
+	<key>WorkingDirectory</key>
+	<string>/Users/mitchellwilliams/Documents/career-ops</string>
+</dict>
+</plist>

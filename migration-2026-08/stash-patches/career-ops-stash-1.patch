@@ -1,0 +1,86 @@
+diff --git a/data/dispatch/convos.json b/data/dispatch/convos.json
+index 739f7100..e77b66c9 100644
+--- a/data/dispatch/convos.json
++++ b/data/dispatch/convos.json
+@@ -1,5 +1,5 @@
+ {
+-  "ts": "2026-07-27T14:30:04.451Z",
++  "ts": "2026-07-28T02:30:19.145Z",
+   "reddit": {
+     "ts": "2026-05-28T01:31:05.219Z",
+     "source": "perplexity-reddit",
+@@ -7,11 +7,12 @@
+     "dryRun": true
+   },
+   "x": {
+-    "ts": "2026-07-27T14:30:04.450Z",
++    "ts": "2026-07-28T02:30:19.145Z",
+     "source": "grok-x",
+     "query": "AI Forward Deployed Engineer / Solutions Architect / Applied AI / AI Program Manager — recent X/Twitter discussions, demos, hiring chatter, retrospectives from Anthropic, OpenAI, Perplexity, Cursor, Cognition, Google DeepMind, xAI builders + their critics",
+     "items": [],
+-    "elapsed_ms": 57116,
+-    "cost_usd": 0.00581
++    "error": "parse_failed: no_json_array_found",
++    "raw_content": "I'll search X for high-signal recent posts on Forward Deployed Engineer / Applied AI roles and related hiring/demos from those labs.Running several focused X searches for the last 72 hours.",
++    "elapsed_ms": 5313
+   }
+ }
+\ No newline at end of file
+diff --git a/docs/cv_strategy_log.md b/docs/cv_strategy_log.md
+index b5160b35..b41db0aa 100644
+--- a/docs/cv_strategy_log.md
++++ b/docs/cv_strategy_log.md
+@@ -385,3 +385,53 @@ pack from shipping.
+ | 16 | Every outlet in the newsroom header has a bullet |
+ | 20 | Capabilities and Projects are both present and non-empty |
+ | 22 | Selected Writing and Projects are separate H2 sections |
++
++### 30. Final apply-pack release rules distilled from the July 2026 pass
++`DISTILLED` · `ALL`
++
++These rules are the standing release contract for every active apply pack. They were
++distilled from 81 correction signals across 55 apply-pack sessions and repeated visual
++and QA checks.
++
++**Research is the foundation.** Every CV, cover letter, and form-fields file must be
++directly informed by the job description, hiring-manager or role-level intel, company
++context, and the strongest documented proof in the prior CV. Do not draft from a generic
++career narrative when role-specific evidence exists.
++
++**Protect ATS while polishing.** Preserve searchable role language, measurable outcomes,
++clear section labels, normal Markdown structure, and extractable PDF text. Typography
++changes belong in the shared print stylesheet; never solve visual density by deleting
++evidence, shrinking body copy, or weakening the writing-craft pass.
++
++**Projects are proof surfaces.** Use no more than the strongest role-resonant projects,
++and hyperlink the project or claim itself to the matching artifact, video, timeline entry,
++or story on thestorytellermitch.com. Never print a raw URL beside the linked phrase.
++
++**Writing samples rotate by role.** Keep the VP voice essay for executive-communications
++and AI-voice roles. Prefer the AJ+ measles script for communications and editorial roles,
++and the Google Day-One orientation script for internal and corporate communications roles.
++Do not let three interchangeable Substack links crowd out a stronger script or artifact.
++
++**Use exact, defensible experience language.** Distinguish newsroom people management
++from the last eight years of IC and program leadership. Describe the xGE audience as the
++company-wide community of 1,000+ Principal, Distinguished, and Fellow Sr. Tech ICs. Use
++tracked or designed impact metrics with the status labeled. Do not invent adoption,
++ranking-team, Tableau, fintech, aerospace, or formal people-management claims.
++
++**Use the approved terminology.** Write `Sr. Tech IC` or `Sr. Tech ICs` when referring to
++the senior technical audience. Write `executive communications`, `senior engineering`,
++and `senior IC` without incorrect hyphenation, except where a true grammatical compound
++requires it. Keep the candidate contact line exactly `Open to relocation`.
++
++**Apply-pack typography is shared and testable.** The descriptor under the name must be
++visibly larger than body text. Employer/date lines, experience summary lines, and the
++Earlier Career newsroom summary must match the body bullet size. Experience summaries are
++italic muted charcoal. Summary paragraphs receive a clean uninterrupted line break.
++Hide web-only controls such as the SOUND toggle from PDFs. After any source edit, render
++again, verify Markdown timestamps precede PDFs, spot-check visuals, and run the zero-failure
++PDF QA gate.
++
++**Evidence:** “research is robust and bulletproof”; “the project links do not look good”; “I
++won't lie or stretch that”; “the line under my earlier newsroom experience should be the
++same size as the summary line underneath the google experiences”; “give me a clean
++uninterrupted line break between each paragraph.”
