@@ -26,8 +26,13 @@
 
         Log paths live OUTSIDE ~/Documents per the 2026-05-21 sandbox finding
         (xpcproxy cannot write to plist StandardOut/ErrorPath under ~/Documents
-        on macOS Tahoe). The script path stays under Documents because it is
-        invoked via NODE_BIN, which is already TCC-granted.
+        on macOS Tahoe). ProgramArguments below `cd`s to the log dir, NOT into
+        stack-ops, before sourcing nvm and exec'ing node: /bin/zsh under launchd
+        is TCC-blocked from ~/Documents (same failure as the cheap-batch plist,
+        fixed 2026-08-07), so `cd`ing into stack-ops here would fail every run
+        with `|| exit 1` and the job would silently never execute. node is still
+        invoked by absolute path into ~/Documents, which works: the restriction
+        is on the process CWD, not on reading the file.
 
         Bootstrap:
           mkdir -p ~/Library/Logs/stack-ops/nightly-hygiene
@@ -48,7 +53,7 @@
     <array>
         <string>/bin/zsh</string>
         <string>-lc</string>
-        <string>cd /Users/mitchellwilliams/Documents/stack-ops || exit 1; export NVM_DIR=&quot;$HOME/.nvm&quot;; [ -s &quot;$NVM_DIR/nvm.sh&quot; ] &amp;&amp; . &quot;$NVM_DIR/nvm.sh&quot;; exec node &apos;/Users/mitchellwilliams/Documents/stack-ops/scripts/nightly-hygiene/nightly-hygiene.mjs&apos;</string>
+        <string>cd /Users/mitchellwilliams/Library/Logs/stack-ops/nightly-hygiene || exit 1; export NVM_DIR=&quot;$HOME/.nvm&quot;; [ -s &quot;$NVM_DIR/nvm.sh&quot; ] &amp;&amp; . &quot;$NVM_DIR/nvm.sh&quot;; exec node &apos;/Users/mitchellwilliams/Documents/stack-ops/scripts/nightly-hygiene/nightly-hygiene.mjs&apos;</string>
     </array>
 
     <key>WorkingDirectory</key>
