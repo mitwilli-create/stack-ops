@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0b1113">
+    <title>Stack Ops Console</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Conversation history">
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div>
+            <p class="brand-name">STACK OPS</p>
+            <p class="brand-caption">LOCAL CONTROL PLANE</p>
+          </div>
+        </div>
+
+        <button class="new-session-button" id="new-session" type="button">
+          <span class="button-glyph">+</span>
+          <span>New session</span>
+          <kbd>⌘ K</kbd>
+        </button>
+
+        <div class="sidebar-heading">
+          <span>Conversation list</span>
+          <span class="count-badge" id="session-count">0</span>
+        </div>
+        <nav class="conversation-list" id="conversation-list" aria-label="Saved conversations"></nav>
+
+        <div class="sidebar-footer">
+          <span class="status-light"></span>
+          <span>LOCALHOST</span>
+          <span class="footer-address">127.0.0.1:3939</span>
+        </div>
+      </aside>
+
+      <main class="chat-panel">
+        <header class="chat-header">
+          <div>
+            <p class="eyebrow">ACTIVE SESSION</p>
+            <h1 id="session-title">New session</h1>
+          </div>
+          <div class="header-state" id="header-state">
+            <span class="state-item"><span class="state-dot"></span>Router ready</span>
+            <span class="state-item">Memory linked</span>
+          </div>
+        </header>
+
+        <div class="routing-strip" aria-label="System status">
+          <div class="routing-strip-label"><span class="pulse-ring"></span>Stack Ops is awake</div>
+          <div class="routing-strip-items">
+            <span id="memory-state">CANONICAL MEMORY</span>
+            <span id="connector-state">0 CONNECTORS</span>
+            <span id="skill-state">SKILLS READY</span>
+          </div>
+        </div>
+
+        <section class="message-list" id="message-list" aria-live="polite">
+          <div class="empty-state" id="empty-state">
+            <div class="empty-orbit" aria-hidden="true"><span></span><span></span><span></span></div>
+            <p class="eyebrow">THE ROUTING LAYER IS AWAKE</p>
+            <h2>Give the work a destination.</h2>
+            <p>Ask anything. Stack Ops will assemble your operator context, classify the work, and choose the execution lane before a model sees it.</p>
+            <div class="starter-prompts">
+              <button type="button" data-prompt="What time is it?">Check the local clock <span>↗</span></button>
+              <button type="button" data-prompt="Rename and organize these files">Route a mechanical task <span>↗</span></button>
+              <button type="button" data-prompt="Use my operating rules to plan the next step">Use my memory <span>↗</span></button>
+            </div>
+          </div>
+        </section>
+
+        <form class="composer-wrap" id="prompt-form">
+          <div class="composer">
+            <textarea id="prompt-input" rows="1" placeholder="Ask Stack Ops anything..." aria-label="Message Stack Ops"></textarea>
+            <div class="composer-bottom">
+              <span class="composer-hint">Context assembles automatically <kbd>⌘ ↵</kbd></span>
+              <button class="send-button" id="send-button" type="submit">
+                <span>Send</span>
+                <span class="send-arrow">↗</span>
+              </button>
+            </div>
+          </div>
+        </form>
+      </main>
+
+      <aside class="inspector-panel" aria-label="Session trace">
+        <div class="inspector-header">
+          <p class="eyebrow">SESSION TRACE</p>
+          <span class="trace-live"><span class="status-light"></span>LIVE</span>
+        </div>
+
+        <section class="trace-section">
+          <p class="trace-label">LAST ROUTE</p>
+          <div class="route-card" id="route-card">
+            <span class="route-placeholder">No request yet</span>
+          </div>
+        </section>
+
+        <section class="trace-section">
+          <p class="trace-label">CONTEXT LOADED</p>
+          <div class="trace-metrics">
+            <div><strong id="memory-count">0</strong><span>canonical files</span></div>
+            <div><strong id="recalled-count">0</strong><span>recalled hits</span></div>
+            <div><strong id="selected-skills">0</strong><span>selected skills</span></div>
+          </div>
+        </section>
+
+        <section class="trace-section">
+          <p class="trace-label">CONNECTORS</p>
+          <div class="connector-list" id="connector-list"></div>
+        </section>
+
+        <div class="inspector-footer">SENSITIVE CONTEXT STAYS OUT OF THE BROWSER TRACE.</div>
+      </aside>
+    </div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

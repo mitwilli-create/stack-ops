@@ -7,6 +7,9 @@
   "scripts": {
     "test": "node --test src/**/*.test.mjs",
     "gate": "node src/router/cli.mjs",
+    "route": "node src/router/route-request.mjs",
+    "ask": "node src/router/ask.mjs",
+    "console": "node src/agent/server.mjs",
     "check:mcp": "node scripts/check-mcp-config.mjs",
     "check:mcp:selftest": "node scripts/check-mcp-config.mjs --self-test"
   },
