@@ -18,7 +18,18 @@ cd "$(dirname "$0")/.." || exit 2
 status=0
 
 # EmDash.yml legitimately contains the banned characters: they are its tokens.
-EXCLUDE_RE='^styles/VoiceOS/EmDash\.yml$'
+# EmDash.yml is the rule that DEFINES the banned glyphs, so it must contain them.
+#
+# migration-2026-08/ is a verbatim archive of the 2026-08 machine migration:
+# stash patches, launchd plists, Brewfile, installed-app and extension lists.
+# It is captured evidence, not outward prose. Its 45 dashed files carry dashes
+# that belong to OTHER repos' work in progress, and a stash patch has to apply
+# byte for byte, so "restructure, never glyph-swap" cannot apply: editing one
+# corrupts the artifact it exists to preserve. Same reasoning as private/**
+# above, which the repo already exempts because linting internal notes only
+# trains you to ignore the linter. Without this the gate blocks every commit in
+# the repo, which is how a gate stops being a gate.
+EXCLUDE_RE='^(styles/VoiceOS/EmDash\.yml|migration-2026-08/)'
 
 # ONE definition of what a banned dash is, called by step 2 (the real sweep) and
 # by step 4 (the probe that proves the sweep works). Do not re-type the grep in
