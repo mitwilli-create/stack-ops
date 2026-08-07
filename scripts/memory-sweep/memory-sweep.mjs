@@ -265,6 +265,32 @@ function pointersResolve(dir, body) {
   return bad;
 }
 
+/**
+ * Is a rewritten index an acceptable size?
+ *
+ * Requiring the target on EVERY rewrite made perfect the enemy of better and
+ * left the worst files untouched. storytellermitch-site sat at 9264B against an
+ * 8000B cap; a rewrite to 6448B was a 30% improvement, and it was thrown away
+ * whole for missing the 6000B target, so the file stayed at 9264B run after run.
+ *
+ * So: a file that starts OVER CAP may land between target and cap, provided it
+ * strictly shrinks. Next run it is merely OVER_TARGET, so the strict rule
+ * applies again and it keeps converging. A file that starts under cap must still
+ * reach target, so this relaxation never becomes the new normal.
+ *
+ * Pure and exported so it can be tested directly. The surrounding validateOp
+ * gates on git eligibility first, which no temp fixture can satisfy, so an
+ * inline version of this rule could only ever be tested by accident.
+ */
+function indexBudgetVerdict(size, wasBytes, target, cap) {
+  if (size <= target) return { ok: true };
+  if (wasBytes > cap) {
+    if (size <= cap && size < wasBytes) return { ok: true };
+    return { ok: false, why: `over-cap rewrite must get under the ${cap}B cap and shrink (${wasBytes} -> ${size})` };
+  }
+  return { ok: false, why: `still over target after rewrite (${size} > ${target})` };
+}
+
 function validateOp(g, op) {
   const bad = (why) => ({ ok: false, why });
   if (!op || typeof op !== 'object') return bad('not an object');
@@ -329,8 +355,13 @@ function validateOp(g, op) {
       const broken = pointersResolve(g.dir, op.new_body);
       if (broken.length) return bad(`pointers do not resolve: ${broken.slice(0, 3).join(', ')}`);
       const size = Buffer.byteLength(op.new_body);
-      const target = op.file === 'MEMORY.md' ? CONFIG.budgets.memoryTargetBytes : CONFIG.budgets.sessionsTargetBytes;
-      if (size > target) return bad(`still over target after rewrite (${size} > ${target})`);
+      const isMem = op.file === 'MEMORY.md';
+      const target = isMem ? CONFIG.budgets.memoryTargetBytes : CONFIG.budgets.sessionsTargetBytes;
+      const cap = isMem ? CONFIG.budgets.memoryCapBytes : CONFIG.budgets.sessionsCapBytes;
+      const wasBytes = existsSync(abs) ? statSync(abs).size : 0;
+
+      const budget = indexBudgetVerdict(size, wasBytes, target, cap);
+      if (!budget.ok) return bad(budget.why);
       return { ok: true };
     }
     case 'compact_sessions': {
@@ -435,11 +466,21 @@ function sweepProject(project) {
     const changed = git(['log', '--oneline', `${prev.sha}..HEAD`, '--', `project-memory/${project}`]);
     const ageH = (Date.now() - (prev.at || 0)) / 3600000;
     const forceAfter = CONFIG.forceAfterHours ?? 168;
-    if (changed.code === 0 && !changed.stdout.trim() && ageH < forceAfter) {
+    // An OVER_CAP index is never skipped, however quiet the project has been.
+    // Change detection is a cost optimisation for HEALTHY projects; "nobody
+    // edited it" is not a reason to leave a known defect in place. Without this,
+    // storytellermitch-site sat at 15762 bytes against an 8000 cap and reported
+    // unchanged-skipped every run, so the worst offender in the vault was the one
+    // project guaranteed never to be repaired. forceAfterHours (168) would have
+    // caught it only after a week, and only if the forced pass then dodged the
+    // concurrent-session guard.
+    const overCap = g.memStatus === 'OVER_CAP';
+    if (changed.code === 0 && !changed.stdout.trim() && ageH < forceAfter && !overCap) {
       out.status = 'unchanged-skipped';
       log(`  unchanged since ${prev.sha.slice(0, 8)} (${ageH.toFixed(0)}h ago), skipping`);
       return out;
     }
+    if (overCap) log(`  unchanged, but ${g.memBytes}B is over the ${CONFIG.budgets.memoryCapBytes}B cap, sweeping anyway`);
   }
   out._stateFile = stateFile;
   out._state = state;
@@ -644,4 +685,4 @@ function invokedDirectly() {
 if (invokedDirectly()) main();
 
 // Exported for guards.test-style verification. Not part of the run path.
-export { validateOp };
+export { validateOp, indexBudgetVerdict };

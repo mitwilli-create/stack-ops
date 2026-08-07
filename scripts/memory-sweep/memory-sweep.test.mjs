@@ -17,7 +17,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const { validateOp } = await import('./memory-sweep.mjs');
+const { validateOp, indexBudgetVerdict } = await import('./memory-sweep.mjs');
 
 /** Build a throwaway project dir with `sizes` bytes per source file. */
 function fixture(sizes) {
@@ -88,4 +88,51 @@ test('importing the module does not start a sweep', () => {
   // this file would never reach here cleanly. Asserting the export exists is the
   // cheap standing proof that import stayed side-effect free.
   assert.equal(typeof validateOp, 'function');
+});
+
+// ---------------------------------------------------------- rewrite_index budget
+//
+// These target indexBudgetVerdict directly. validateOp gates on git eligibility
+// first, and no temp fixture can be tracked-and-clean in the real vault, so an
+// earlier attempt to drive this rule through validateOp produced two tests that
+// "passed" on the eligibility rejection instead of the size rule. A test that
+// passes for the wrong reason is worse than no test.
+
+const TARGET = 6000, CAP = 8000;
+
+test('a rewrite that reaches target is accepted', () => {
+  assert.equal(indexBudgetVerdict(5000, 9264, TARGET, CAP).ok, true);
+  assert.equal(indexBudgetVerdict(5000, 7000, TARGET, CAP).ok, true);
+});
+
+test('over-cap file may land between target and cap if it shrinks', () => {
+  // The real storytellermitch-site case: 9264B against an 8000B cap, rewritten
+  // to 6448B. Previously rejected whole, so the file stayed at 9264B every run.
+  const r = indexBudgetVerdict(6448, 9264, TARGET, CAP);
+  assert.equal(r.ok, true, `a 9264 to 6448 improvement must be accepted, got: ${r.why}`);
+});
+
+test('over-cap file may NOT land still over cap', () => {
+  const r = indexBudgetVerdict(8500, 9264, TARGET, CAP);
+  assert.equal(r.ok, false);
+  assert.match(r.why, /must get under the 8000B cap/);
+});
+
+test('over-cap file may NOT grow', () => {
+  assert.equal(indexBudgetVerdict(9500, 9264, TARGET, CAP).ok, false);
+});
+
+test('a HEALTHY file still must reach target: the relaxation is scoped', () => {
+  // 7000B is under the 8000B cap, so the strict rule applies and a 6448B rewrite
+  // missing the 6000B target is still rejected. Without this the exemption would
+  // quietly become the new normal for every file.
+  const r = indexBudgetVerdict(6448, 7000, TARGET, CAP);
+  assert.equal(r.ok, false, 'a file under cap must still reach target');
+  assert.match(r.why, /still over target/);
+});
+
+test('exact boundaries', () => {
+  assert.equal(indexBudgetVerdict(TARGET, 9264, TARGET, CAP).ok, true, 'exactly target passes');
+  assert.equal(indexBudgetVerdict(CAP, 9264, TARGET, CAP).ok, true, 'exactly cap passes when starting over cap');
+  assert.equal(indexBudgetVerdict(9264, 9264, TARGET, CAP).ok, false, 'no change is not progress');
 });
