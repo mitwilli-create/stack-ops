@@ -290,6 +290,25 @@ function validateOp(g, op) {
       if (op.from.includes(op.into)) return bad('into listed in from');
       for (const n of op.from) if (!eligible(n, g.facts)) return bad(`${n} not eligible`);
       if (existsSync(join(g.dir, op.into)) && !eligible(op.into, g.facts)) return bad(`${op.into} not eligible`);
+
+      // Compression floor. The first live run (2026-08-06) merged 4 files of 8733
+      // bytes into 1287, an 85% cut, while claiming "without losing any fact". It
+      // had dropped detail ("Composer" from the flat-rate routing rule). Merging
+      // duplicates should remove REPETITION, not content, so a body far smaller
+      // than its sources is summarising rather than merging. Reject and let it
+      // retry with a narrower merge.
+      let sourceBytes = 0;
+      for (const n of op.from) {
+        try { sourceBytes += statSync(join(g.dir, n)).size; } catch { /* counted as 0 */ }
+      }
+      if (existsSync(join(g.dir, op.into))) {
+        try { sourceBytes += statSync(join(g.dir, op.into)).size; } catch { /* counted as 0 */ }
+      }
+      const floor = CONFIG.mergeCompressionFloor ?? 0.4;
+      const kept = sourceBytes ? Buffer.byteLength(op.new_body) / sourceBytes : 1;
+      if (kept < floor) {
+        return bad(`merge keeps only ${Math.round(kept * 100)}% of ${sourceBytes}B of sources (floor ${Math.round(floor * 100)}%): summarising, not merging`);
+      }
       return { ok: true };
     }
     case 'supersede': {
