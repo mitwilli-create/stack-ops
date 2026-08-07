@@ -36,7 +36,7 @@
 //   node memory-sweep.mjs --layers indices # comma list: indices,facts,sessions
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, statSync, realpathSync } from 'node:fs';
 import { dirname, join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -630,4 +630,18 @@ function main() {
   log('=== memory sweep done ===');
 }
 
-main();
+// Only sweep when invoked as a script. Importing this module (the validator test
+// does) must not start a live run. realpath on both sides so the symlinked vault
+// paths and any nvm shim still resolve equal.
+function invokedDirectly() {
+  try {
+    return process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return true; // never let a resolution failure silently disable the scheduled job
+  }
+}
+
+if (invokedDirectly()) main();
+
+// Exported for guards.test-style verification. Not part of the run path.
+export { validateOp };
