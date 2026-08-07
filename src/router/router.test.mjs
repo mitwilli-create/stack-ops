@@ -141,22 +141,40 @@ test('gate: credential-holding paths → anthropic-direct', () => {
   assert.equal(classify({ text: 'fix the shell rc', paths: ['/Users/m/.zshenv'] }, cfg).route, ROUTE.ANTHROPIC_DIRECT);
 });
 
-// Uses the REAL private config, not the synthetic one, the 2026-07-19 session
-// shipped a gate whose unit tests passed while the live overlay still gated
-// everything, because the tests never loaded the overlay. These two do.
+const PRIVATE_OVERLAY_FIXTURE = {
+  privatePathPatterns: [/(?:^|\/)Documents\/Severance(?:\/|$)/],
+};
+
+// Exercises the same asynchronous overlay boundary as production without making
+// a public clean checkout depend on Mitchell's gitignored private file.
 test('gate: the Severance directory is gated (legal/privileged, by ruling)', async () => {
   // The overlay's trigger is anchored on `Documents/Severance` specifically, so
   // the username and any subfolder are irrelevant to what this asserts, keep
   // real client engagement names OUT of a repo intended to go public.
-  const d = await classifyAsync({ text: 'summarize this', paths: ['/Users/example/Documents/Severance/notes.md'] });
+  const d = await classifyAsync(
+    { text: 'summarize this', paths: ['/Users/example/Documents/Severance/notes.md'] },
+    { privateConfig: PRIVATE_OVERLAY_FIXTURE },
+  );
   assert.equal(d.route, ROUTE.ANTHROPIC_DIRECT);
   assert.ok(d.reasons.some(r => r.signal === SIGNAL.PRIVATE_PATH));
 });
 
 test('gate: the WORD "severance" still routes cheap, only the directory is gated', async () => {
-  const d = await classifyAsync({ text: 'my severance is about 14 weeks of base salary, help me plan the runway' });
+  const d = await classifyAsync(
+    { text: 'my severance is about 14 weeks of base salary, help me plan the runway' },
+    { privateConfig: PRIVATE_OVERLAY_FIXTURE },
+  );
   assert.equal(d.route, ROUTE.AUTO,
     'a bare /severance/ pattern would re-gate financial details, which are ruled cheap');
+});
+
+test('gate: injected private config promises are awaited', async () => {
+  const d = await classifyAsync(
+    { text: 'summarize this', paths: ['/Users/example/Documents/Severance/notes.md'] },
+    { privateConfig: Promise.resolve(PRIVATE_OVERLAY_FIXTURE) },
+  );
+  assert.equal(d.route, ROUTE.ANTHROPIC_DIRECT);
+  assert.ok(d.reasons.some(r => r.signal === SIGNAL.PRIVATE_PATH));
 });
 
 test('gate: paths ruled OUT of the NDA trigger route cheap', async () => {

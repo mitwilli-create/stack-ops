@@ -378,6 +378,8 @@ export function classify(input, config = buildConfig()) {
  * use the sync classify() with a pre-built config in hot paths / tests.
  */
 export async function classifyAsync(input, overrides = {}) {
-  const pc = await loadPrivateConfig();
+  const pc = Object.hasOwn(overrides, 'privateConfig')
+    ? await overrides.privateConfig
+    : await loadPrivateConfig();
   return classify(input, buildConfig(pc, overrides));
 }
