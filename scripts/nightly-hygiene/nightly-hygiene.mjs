@@ -25,7 +25,7 @@
 //   node nightly-hygiene.mjs --no-push       # commit locally, skip push
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { screen } from './guards.mjs';
@@ -80,9 +80,42 @@ function run(cmd, args, opts = {}) {
 
 const git = (repoDir, args, opts = {}) => run('git', args, { cwd: repoDir, ...opts });
 
-/** Parse `git status --porcelain=v1 -z` into Map(path -> XY status). */
+/**
+ * Text that means the machine is broken, not that this repo is broken. A TCC
+ * revocation, a denied getcwd, or a vanished working directory are all faults
+ * that will hit every remaining repo identically, so they must never be recorded
+ * as a per-repo verdict. See the 2026-08-07 run: one fault at 02:08:13 was
+ * reported as 12 separate repo failures.
+ */
+function isEnvironmentFault(text) {
+  return /Operation not permitted|EPERM|getcwd|shell-init|no such file or directory \(os error 2\)/i.test(String(text || ''));
+}
+
+/**
+ * True when this process can still read the tree it is supposed to be working
+ * on. Probes the same three access paths that died together on 2026-08-07:
+ * a direct read, a listing, and a shell started with its cwd inside the tree.
+ */
+function documentsReadable() {
+  try { readdirSync(CONFIG.rootDir); } catch { return false; }
+  const sh = run('/bin/sh', ['-c', 'pwd >/dev/null && echo ok'], { cwd: CONFIG.rootDir, timeoutMs: 15_000 });
+  return sh.code === 0 && !isEnvironmentFault(sh.stderr);
+}
+
+/**
+ * Parse `git status --porcelain=v1 -z` into Map(path -> XY status).
+ *
+ * Throws on git failure. It used to swallow it and return an empty Map, which
+ * made a blind run indistinguishable from a clean one: diffStatus would find no
+ * changes and the repo would be reported "clean-no-changes" while the job could
+ * not actually see the files. A check that cannot fail is not a check.
+ */
 function statusMap(repoDir) {
-  const { stdout } = git(repoDir, ['status', '--porcelain=v1', '-z']);
+  const r = git(repoDir, ['status', '--porcelain=v1', '-z']);
+  if (r.code !== 0) {
+    throw new Error(`git status failed in ${repoDir}: ${(r.stderr || '').trim().slice(0, 200) || 'exit ' + r.code}`);
+  }
+  const { stdout } = r;
   const map = new Map();
   const parts = stdout.split('\0');
   for (let i = 0; i < parts.length; i++) {
@@ -192,18 +225,38 @@ function runClaudePass(repo, prompt) {
   ];
   if (CONFIG.fallbackModel) args.push('--fallback-model', CONFIG.fallbackModel);
 
-  const r = run(CONFIG.claudeBin, args, {
-    cwd: repo.dir,
+  // cwd is deliberately NOT repo.dir. CONFIG.claudeBin is a /bin/sh wrapper, and
+  // a shell started with its cwd inside ~/Documents calls getcwd() at init; when
+  // the TCC grant is not in force that fails with "shell-init: ... getcwd ...
+  // Operation not permitted" before claude ever runs. The repo reaches claude via
+  // --add-dir instead, so no process in the chain needs a cwd under ~/Documents.
+  const spawnOpts = {
+    cwd: RUN_LOG_DIR,
     timeoutMs: CONFIG.perRepoTimeoutMs,
     // Belt and braces: the wrapper already strips this, but if anything ever
     // resolves the raw binary instead, an absent key still cannot bill per token.
     env: { ANTHROPIC_API_KEY: '' },
-  });
+  };
+
+  let r = run(CONFIG.claudeBin, args, spawnOpts);
+
+  // One retry, only for machine-level faults and only when the tree is readable
+  // again. A repo-level failure is never retried: it would just cost twice.
+  if (r.code !== 0 && isEnvironmentFault(r.stderr) && documentsReadable()) {
+    log('  environment fault on first attempt, tree is readable again, retrying once');
+    r = run(CONFIG.claudeBin, args, spawnOpts);
+  }
 
   writeFileSync(join(RUN_LOG_DIR, `${repo.name}.claude.json`), r.stdout || r.stderr || '');
 
   if (r.timedOut) return { ok: false, error: `timed out after ${CONFIG.perRepoTimeoutMs}ms` };
-  if (r.code !== 0) return { ok: false, error: `claude exited ${r.code}: ${r.stderr.slice(0, 400)}` };
+  if (r.code !== 0) {
+    return {
+      ok: false,
+      error: `claude exited ${r.code}: ${r.stderr.slice(0, 400)}`,
+      envFault: isEnvironmentFault(r.stderr),
+    };
+  }
 
   let report = null;
   let costUsd = 0;
@@ -274,9 +327,10 @@ function processRepo(repo) {
   SPEND.total += out.costUsd;
   if (out.costUsd) log(`  cost $${out.costUsd.toFixed(2)} (run total $${SPEND.total.toFixed(2)})`);
   if (!pass.ok) {
-    out.status = 'claude-failed';
+    out.status = pass.envFault ? 'environment-fault' : 'claude-failed';
     out.error = pass.error;
-    log(`  FAILED: ${pass.error}`);
+    out.envFault = !!pass.envFault;
+    log(`  FAILED${pass.envFault ? ' (environment, not this repo)' : ''}: ${pass.error}`);
     return out;
   }
   out.deferred = pass.report?.deferred || [];
@@ -408,7 +462,7 @@ function discoverRepos() {
 
 // ------------------------------------------------------------------ the report
 
-function writeReport(results) {
+function writeReport(results, abortedReason = null) {
   const finished = new Date();
   const mins = Math.round((finished - STARTED_AT) / 60000);
   const by = (s) => results.filter((r) => r.status === s);
@@ -418,6 +472,14 @@ function writeReport(results) {
   lines.push('');
   lines.push(`Ran ${results.length} repos in ${mins} min. Run id \`${RUN_ID}\`.`);
   lines.push('');
+
+  // A degraded run leads with what did not run and why, never with its successes.
+  if (abortedReason) {
+    lines.push('> **This run stopped early on a machine-level fault.**');
+    lines.push('>');
+    lines.push(`> ${abortedReason}`);
+    lines.push('');
+  }
   lines.push(`**Pushed:** ${by('pushed').length} · **Clean, nothing to do:** ${by('clean-no-changes').length} · **Held back:** ${results.length - by('pushed').length - by('clean-no-changes').length}`);
   lines.push('');
   lines.push(`**Cost this run: $${SPEND.total.toFixed(2)}** (cap $${CONFIG.nightlyCostCapUsd ?? 'none'}). Check this against your Anthropic console for the first week: the wrapper is meant to bill the subscription, but the 2026-08-06 incident showed that is not guaranteed.`);
@@ -548,6 +610,7 @@ function main() {
   writeFileSync(lockPath, String(Date.now()));
 
   const results = [];
+  let abortedReason = null;
   try {
     let repos = discoverRepos();
 
@@ -562,6 +625,10 @@ function main() {
     log(`repos: ${repos.map((r) => r.name).join(', ')}`);
     const deadline = Date.now() + CONFIG.globalDeadlineMs;
 
+    // Circuit-breaker state. See the abort block below.
+    let consecutiveEnvFaults = 0;
+    const ENV_FAULT_LIMIT = CONFIG.envFaultAbortAfter ?? 2;
+
     for (const repo of repos) {
       if (Date.now() > deadline) {
         log('global deadline reached, stopping');
@@ -573,19 +640,59 @@ function main() {
         results.push({ repo: repo.name, branch: repo.branch, status: 'skipped-cost-cap', deferred: [], preexistingDirty: 0 });
         continue;
       }
+      let outcome;
       try {
-        results.push(processRepo(repo));
+        outcome = processRepo(repo);
       } catch (err) {
         log(`  UNCAUGHT in ${repo.name}: ${err.message}`);
-        results.push({ repo: repo.name, branch: repo.branch, status: 'crashed', error: err.message, deferred: [], preexistingDirty: 0 });
+        outcome = {
+          repo: repo.name, branch: repo.branch, status: 'crashed',
+          error: err.message, envFault: isEnvironmentFault(err.message),
+          deferred: [], preexistingDirty: 0,
+        };
+      }
+      results.push(outcome);
+
+      // Circuit breaker. On 2026-08-07 a single machine-level fault at 02:08:13
+      // was recorded as 12 consecutive repo failures in 400ms, each reading like
+      // that repo's own fault. Consecutive environment faults mean the machine is
+      // broken, so stop, say so once, and leave the untouched repos untouched
+      // rather than burning the rota and the cost cap on certain failures.
+      if (outcome.envFault) {
+        consecutiveEnvFaults += 1;
+        if (consecutiveEnvFaults >= ENV_FAULT_LIMIT) {
+          const readable = documentsReadable();
+          log(`ABORTING: ${consecutiveEnvFaults} consecutive environment faults. ` +
+              `${CONFIG.rootDir} is ${readable ? 'readable again, so the fault is inside the claude spawn path' : 'NOT readable: the TCC grant for this job is gone'}.`);
+          abortedReason =
+            `Stopped after ${consecutiveEnvFaults} consecutive environment faults. ` +
+            `${CONFIG.rootDir} was ${readable ? 'still readable from the runner, so the fault is in the claude spawn path, not a blanket TCC denial' : 'unreadable from the runner, so this job had lost its Files and Folders grant'}. ` +
+            'The repos below this point were not attempted and are not failing.';
+          break;
+        }
+      } else {
+        consecutiveEnvFaults = 0;
       }
     }
   } finally {
     try { rmSync(lockPath, { force: true }); } catch { /* best effort */ }
   }
 
-  writeReport(results);
+  writeReport(results, abortedReason);
   log('=== nightly hygiene done ===');
 }
 
-main();
+// Only run when invoked as a script, so the tests can import the classifier
+// without starting a live 14-repo pass. realpath both sides so nvm shims and
+// symlinked paths still compare equal.
+function invokedDirectly() {
+  try {
+    return process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return true; // a resolution failure must never silently disable the nightly job
+  }
+}
+
+if (invokedDirectly()) main();
+
+export { isEnvironmentFault };

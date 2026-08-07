@@ -19,6 +19,14 @@ skip that step and record it under `deferred` in your final report.
 4. Prefer a small number of high-confidence fixes over broad refactors. If you
    are not confident a change is correct and safe, report it instead of making it.
 5. No new dependencies. No version bumps. No deletions of files you did not create.
+6. **Never leave a background process running, and never kill by pattern.** Do
+   not use `nohup`, `disown`, `&`, or `(cmd &)` to detach anything, and never run
+   `pkill -f` or `killall`. A pattern kill can match this runner or a sibling
+   session, and an orphaned server outlives your pass and pollutes the next repo.
+   If you must serve files, run the server in the foreground of a single bounded
+   command, capture its PID, and `kill "$PID"` that exact PID in the same command.
+7. **Stay inside `{{REPO_DIR}}`.** Do not `cd` elsewhere and edit, and do not
+   write outside this repo except into the run log directory you were given.
 
 ## Pass
 

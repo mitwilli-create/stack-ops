@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Automatic, research-validated model-triage system for a multi-vendor AI stack.",
   "scripts": {
-    "test": "node --test src/**/*.test.mjs",
+    "test": "node --test src/**/*.test.mjs scripts/**/*.test.mjs",
     "gate": "node src/router/cli.mjs",
     "route": "node src/router/route-request.mjs",
     "ask": "node src/router/ask.mjs",
