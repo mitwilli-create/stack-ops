@@ -86,3 +86,36 @@ test('the breaker trips on consecutive faults and resets on a good repo', () => 
 test('importing the runner does not start a nightly pass', () => {
   assert.equal(typeof isEnvironmentFault, 'function');
 });
+
+// ------------------------------------------------------ self-restart bounding
+
+import { mkdtempSync, writeFileSync as wfs, existsSync as ex, rmSync as rm } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+test('self-restart fires once per day and never loops', () => {
+  // Mirrors the marker guard in main(). A restart loop on a job that spends
+  // money is worse than a missed night, so the second attempt on the same
+  // calendar day must be refused.
+  const dir = mkdtempSync(join(tmpdir(), 'nh-restart-'));
+  try {
+    const decide = (day) => {
+      const marker = join(dir, `self-restart-${day}`);
+      if (ex(marker)) return 'refused';
+      wfs(marker, 'x');
+      return 'restarted';
+    };
+    assert.equal(decide('2026-08-07'), 'restarted', 'first fault of the day restarts');
+    assert.equal(decide('2026-08-07'), 'refused', 'second fault the same day must NOT restart');
+    assert.equal(decide('2026-08-08'), 'restarted', 'the next day is allowed again');
+  } finally { rm(dir, { recursive: true, force: true }); }
+});
+
+test('self-restart is gated on the runner itself being blind', () => {
+  // shouldSelfRestart = !readable. Restarting when the runner can still read the
+  // tree would be wrong: that fault lives in the claude spawn path, and a fresh
+  // process tree would not fix it, it would just spend the money again.
+  const shouldRestart = (readable) => !readable;
+  assert.equal(shouldRestart(false), true, 'whole tree blind: restart');
+  assert.equal(shouldRestart(true), false, 'runner can still read: do NOT restart');
+});

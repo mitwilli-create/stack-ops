@@ -611,6 +611,7 @@ function main() {
 
   const results = [];
   let abortedReason = null;
+  let shouldSelfRestart = false;
   try {
     let repos = discoverRepos();
 
@@ -663,11 +664,14 @@ function main() {
         if (consecutiveEnvFaults >= ENV_FAULT_LIMIT) {
           const readable = documentsReadable();
           log(`ABORTING: ${consecutiveEnvFaults} consecutive environment faults. ` +
-              `${CONFIG.rootDir} is ${readable ? 'readable again, so the fault is inside the claude spawn path' : 'NOT readable: the TCC grant for this job is gone'}.`);
+              `${CONFIG.rootDir} is ${readable ? 'readable from the runner, so the fault is inside the claude spawn path' : 'NOT readable from the runner: this whole process tree has lost file access'}.`);
           abortedReason =
             `Stopped after ${consecutiveEnvFaults} consecutive environment faults. ` +
-            `${CONFIG.rootDir} was ${readable ? 'still readable from the runner, so the fault is in the claude spawn path, not a blanket TCC denial' : 'unreadable from the runner, so this job had lost its Files and Folders grant'}. ` +
-            'The repos below this point were not attempted and are not failing.';
+            (readable
+              ? `${CONFIG.rootDir} was still readable from the runner, so the fault is in the claude spawn path rather than affecting the whole job.`
+              : `${CONFIG.rootDir} was unreadable from the runner, so the entire process tree lost file access. Note this is NOT a revoked grant: on 2026-08-07 the TCC record for this node binary stayed allowed and untouched (last modified 2026-04-26) throughout, and a fresh process tree after reboot worked immediately. It is a runtime authorization failure bound to the running tree.`) +
+            ' The repos below this point were not attempted and are not failing.';
+          shouldSelfRestart = !readable;
           break;
         }
       } else {
@@ -679,6 +683,40 @@ function main() {
   }
 
   writeReport(results, abortedReason);
+
+  // Self-heal, once per day, when the whole tree lost file access.
+  //
+  // The 2026-08-07 forensics say this is recoverable by restarting rather than
+  // by anything a human clicks. The TCC record for this node binary was ALLOWED
+  // and untouched (last modified 2026-04-26) across the whole incident, and the
+  // same binary read ~/Documents fine from a fresh process tree afterwards. The
+  // denial was bound to the running tree, hit even the top-level runner (proved
+  // by throughline reporting 0 dirty files while it had an untracked directory
+  // a week old), and never recovered inside that process's lifetime.
+  //
+  // So a brand new tree from launchd is the fix. It is bounded to one restart
+  // per calendar day by a marker file, because a restart loop on a job that
+  // spends money is far worse than a missed night. The kickstart is detached and
+  // delayed so this process exits cleanly first rather than being killed
+  // mid-write by its own restart.
+  if (shouldSelfRestart && !DRY_RUN) {
+    const marker = join(CONFIG.logDir, `self-restart-${STARTED_AT.toISOString().slice(0, 10)}`);
+    if (existsSync(marker)) {
+      log('tree lost file access, but a self-restart already ran today. Not restarting again.');
+    } else {
+      try {
+        writeFileSync(marker, `${new Date().toISOString()} run ${RUN_ID}\n`);
+        const label = CONFIG.launchdLabel || 'com.mitchell.stack-ops.nightly-hygiene';
+        const target = `gui/${process.getuid()}/${label}`;
+        log(`tree lost file access; restarting ${label} once in a fresh process tree`);
+        spawnSync('/bin/sh', ['-c',
+          `(sleep 10; /bin/launchctl kickstart -k ${target}) >/dev/null 2>&1 &`], { detached: true });
+      } catch (e) {
+        log(`self-restart could not be scheduled: ${e.message}`);
+      }
+    }
+  }
+
   log('=== nightly hygiene done ===');
 }
 
