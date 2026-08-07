@@ -57,7 +57,7 @@ const SECRETS = {
   'github.txt': 'token: ghp_' + 'b'.repeat(36),
   'aws.txt': 'aws_access_key_id = AKIAIOSFODNN7EXAMPLE',
   'google.txt': 'key: AIza' + 'C'.repeat(35),
-  'slack.txt': 'xoxb-123456789012-abcdefghijklmnop',
+  'slack.txt': 'xoxb-' + 'g'.repeat(29),
   'pem.txt': '-----BEGIN RSA PRIVATE KEY-----\nMIIE\n',
   'openai.txt': 'OPENAI_API_KEY=sk-' + 'd'.repeat(40),
   'pplx.txt': 'PERPLEXITY=pplx-' + 'e'.repeat(36),
