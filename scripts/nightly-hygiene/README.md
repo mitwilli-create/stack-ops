@@ -19,6 +19,13 @@ morning at `~/Library/Logs/stack-ops/nightly-hygiene/latest-report.md`.
    keys, credentials) and a content scan for secret shapes.
 5. **Commit and push** to the repo's current branch.
 
+If the Claude subscription returns a weekly-limit, quota, credential, or
+provider-availability failure before edits begin, the runner invokes the
+configured subscription-first provider failover adapter with the same prompt
+and repository. The receipt records each attempted provider and resolved model.
+If the adapter is missing or fails, the repo is held with that reason. It is
+never reported as a clean no-op.
+
 Any failure after step 2 reverts that repo's job-made changes and moves on. One
 bad repo never blocks the other fourteen.
 
@@ -36,7 +43,7 @@ bad repo never blocks the other fourteen.
   | Skill | Why it is skipped |
   |---|---|
   | `/git-cleanup` | `disable-model-invocation: true`, and its own docs say it is not designed for headless automation (two user-confirmation gates). Step 1 above is its safe deterministic subset. |
-  | `/autofix` | Needs an open pull request with unresolved CodeRabbit threads, and applies fixes with per-change approval. Nothing to do unattended. |
+  | `/autofix` | Disabled for hosted-review threads. Use local QA and local review skills; nothing runs unattended. |
   | `/mp-triage` | Needs a configured issue tracker (`/mp-setup-skills`). Not set up in these repos. |
   | `/mp-wayfinder` | Same, plus it exists to surface decisions for you to make. |
 
@@ -45,6 +52,10 @@ bad repo never blocks the other fourteen.
 - **It never deletes a squash-merged branch.** `git branch -d` refuses those and
   `-D` is not safe unattended. The report lists them with a ready-to-paste `-D`
   command.
+
+The in-session coordinator in `scripts/instance-shipping/` handles work that
+becomes dormant while an instance is running. Nightly hygiene remains the
+overnight sweep and does not adopt pre-existing dirty work by itself.
 
 ## Billing
 

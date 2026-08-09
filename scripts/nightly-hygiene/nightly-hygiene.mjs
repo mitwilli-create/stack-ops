@@ -29,6 +29,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { screen } from './guards.mjs';
+import { canReplayProviderFailure, providerAttempts, providerFallbackEligible } from './provider-fallback.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CONFIG = JSON.parse(readFileSync(join(HERE, 'config.json'), 'utf8'));
@@ -214,7 +215,7 @@ function buildPrompt(repo, preexisting) {
     .replaceAll('{{PREEXISTING_DIRTY}}', list);
 }
 
-function runClaudePass(repo, prompt) {
+function runClaudePass(repo, prompt, baselineStatus) {
   const args = [
     '-p', prompt,
     '--output-format', 'json',
@@ -249,12 +250,40 @@ function runClaudePass(repo, prompt) {
 
   writeFileSync(join(RUN_LOG_DIR, `${repo.name}.claude.json`), r.stdout || r.stderr || '');
 
+  // A subscription quota or provider-availability failure is safe to advance
+  // before edits begin. The existing provider-failover agent owns the ordered
+  // subscription chain and strips metered API keys from its child environment.
+  // Do not replay on arbitrary failures: a timeout or malformed response may
+  // have left partial edits in the repo.
+  let primaryChanged = [];
+  if (r.code !== 0) {
+    try {
+      primaryChanged = diffStatus(baselineStatus, statusMap(repo.dir));
+    } catch {
+      // If the post-failure snapshot cannot be read, replay is unsafe.
+      primaryChanged = ['<status-unavailable>'];
+    }
+  }
+  if (r.code !== 0 && canReplayProviderFailure({
+    eligible: providerFallbackEligible(r.stderr || r.stdout),
+    changedPaths: primaryChanged,
+  })) {
+    const fallback = runProviderFallback(repo, prompt);
+    if (fallback.ok) return fallback;
+    return {
+      ok: false,
+      error: `claude failed and provider fallback failed: ${fallback.error}`,
+      providerFallback: fallback,
+    };
+  }
+
   if (r.timedOut) return { ok: false, error: `timed out after ${CONFIG.perRepoTimeoutMs}ms` };
   if (r.code !== 0) {
     return {
       ok: false,
       error: `claude exited ${r.code}: ${r.stderr.slice(0, 400)}`,
       envFault: isEnvironmentFault(r.stderr),
+      primaryChanged,
     };
   }
 
@@ -270,6 +299,47 @@ function runClaudePass(repo, prompt) {
 
   return { ok: true, report, costUsd };
 }
+
+function runProviderFallback(repo, prompt) {
+  const script = CONFIG.providerFailoverAgent;
+  if (!script || !existsSync(script)) {
+    return { ok: false, error: `provider failover adapter missing: ${script || '(not configured)'}` };
+  }
+  const promptFile = join(RUN_LOG_DIR, `${repo.name}.provider-fallback-prompt.md`);
+  writeFileSync(promptFile, prompt);
+  const args = [
+    script,
+    '--prompt-file', promptFile,
+    '--cwd', repo.dir,
+    '--timeout-ms', String(CONFIG.perRepoTimeoutMs),
+  ];
+  const r = run(process.execPath, args, {
+    cwd: RUN_LOG_DIR,
+    timeoutMs: CONFIG.perRepoTimeoutMs + 30_000,
+    env: {
+      ANTHROPIC_API_KEY: '',
+      ANTHROPIC_AUTH_TOKEN: '',
+      OPENAI_API_KEY: '',
+      XAI_API_KEY: '',
+    },
+  });
+  writeFileSync(join(RUN_LOG_DIR, `${repo.name}.provider-fallback.log`), `${r.stderr}\n${r.stdout}`);
+  if (r.code !== 0 || !r.stdout.trim()) {
+    return {
+      ok: false,
+      error: `adapter exited ${r.code}: ${(r.stderr || r.stdout).slice(0, 400)}`,
+      attempts: providerAttempts(r.stderr),
+    };
+  }
+  return {
+    ok: true,
+    report: null,
+    costUsd: 0,
+    providerFallback: true,
+    attempts: providerAttempts(r.stderr),
+  };
+}
+
 
 // ------------------------------------------------------------ phase C: verify
 
@@ -321,7 +391,7 @@ function processRepo(repo) {
   if (out.cleanup.removed.length) log(`  pruned branches: ${out.cleanup.removed.join(', ')}`);
 
   // B. Claude review + fix pass
-  const pass = runClaudePass(repo, buildPrompt(repo, [...before.keys()]));
+  const pass = runClaudePass(repo, buildPrompt(repo, [...before.keys()]), before);
   out.claude = pass;
   out.costUsd = pass.costUsd || 0;
   SPEND.total += out.costUsd;
