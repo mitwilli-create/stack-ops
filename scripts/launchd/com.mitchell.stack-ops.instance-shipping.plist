@@ -11,6 +11,12 @@
     <string>com.mitchell.stack-ops.instance-shipping</string>
     <key>ProgramArguments</key>
     <array>
+        <string>/usr/bin/env</string>
+        <string>-i</string>
+        <string>HOME=/Users/mitchellwilliams</string>
+        <string>PATH=/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <string>GIT_TERMINAL_PROMPT=0</string>
+        <string>GH_PROMPT_DISABLED=1</string>
         <string>/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin/node</string>
         <string>/Users/mitchellwilliams/Documents/stack-ops/scripts/instance-shipping/instance-shipping.mjs</string>
         <string>--once</string>
