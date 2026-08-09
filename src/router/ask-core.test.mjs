@@ -12,7 +12,6 @@ test('passes assembled memory context to the selected dispatcher', async () => {
       context: async ({ prompt }) => ({
         systemPrompt: 'CANONICAL_CONTEXT_FOR_' + prompt,
         sources: [{ path: 'memory.md' }],
-        memories: [],
         skills: [],
       }),
       route: async ({ text }) => ({

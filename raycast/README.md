@@ -35,7 +35,7 @@ wrapper starts at login and keeps the server independent of Raycast. Sessions
 are stored outside this repository in the macOS application support directory
 unless STACK_OPS_STATE_DIR is set.
 
-The console assembles the canonical llm-memory files, best-effort mem0
-recall, and relevant skills before an external dispatch. It displays only
+The console assembles the canonical llm-memory files and relevant skills
+before an external dispatch. It displays only
 counts and route metadata in the browser trace. MCP entries are read from
 .mcp.json, with credential values kept out of the response.

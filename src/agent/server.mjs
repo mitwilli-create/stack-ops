@@ -52,7 +52,7 @@ function safeResult(result) {
     target: result.target,
     metadata: result.metadata,
     context: result.context
-      ? { sources: result.context.sources, memories: result.context.memories, skills: result.context.skills }
+      ? { sources: result.context.sources, skills: result.context.skills }
       : null,
   };
 }
@@ -62,7 +62,6 @@ function safeStatus(connectors, skills) {
     name: 'Stack Ops',
     memory: {
       canonicalFiles: true,
-      recalledIndex: process.env.MEM0_MODE || 'platform',
     },
     connectors: connectors.map(({ name, transport, credentialNames }) => ({ name, transport, credentialNames })),
     skills: skills.map(({ name, description }) => ({ name, description })),

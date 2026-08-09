@@ -14,7 +14,7 @@ test('handles a prompt through the context, routing, dispatch, and history seams
     const seen = {};
     const host = createSessionHost({
       store,
-      context: async ({ prompt }) => ({ systemPrompt: 'MEMORY_FOR_' + prompt, sources: [], memories: [], skills: [] }),
+      context: async ({ prompt }) => ({ systemPrompt: 'MEMORY_FOR_' + prompt, sources: [], skills: [] }),
       route: async ({ text }) => ({ lane: 'frontier', taskType: 'frontier_synthesis', selected: { handle: 'test:model' }, targets: [], signals: [text] }),
       dispatch: async ({ prompt, decision, context }) => {
         seen.prompt = prompt;
@@ -32,6 +32,7 @@ test('handles a prompt through the context, routing, dispatch, and history seams
     assert.equal(seen.decision.selected.handle, 'test:model');
     assert.equal(result.session.messages.length, 2);
     assert.equal(result.session.messages[1].metadata.lane, 'frontier');
+    assert.equal('recalledMemories' in result.metadata, false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

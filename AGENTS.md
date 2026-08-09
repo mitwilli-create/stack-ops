@@ -10,7 +10,7 @@ anything here that conflicts.
 ## What this repo is
 
 Mitchell's model-routing and delegation substrate. It holds the `cheap` CLI and its privacy gate, the
-openrouter-auto router, the PR-triage logic, the mem0 client, the council MCP server, and the anti-slop
+openrouter-auto router, the PR-triage logic, canonical memory context, the council MCP server, and the anti-slop
 prose gate. **It is intended to become public**, which shapes every constraint below.
 
 ## Hard constraints
