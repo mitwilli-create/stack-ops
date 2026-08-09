@@ -350,7 +350,7 @@ test('gate: a FILE named credentials is still gated', () => {
 // RESIDUAL OVER-FILTER, known and accepted 2026-07-22. Path-context narrowing
 // cannot separate "documenting a path" from "pasting a path": both produce the
 // identical token. So a doc that spells out ~/.secrets/api-keys.env still gates,
-// and docs/memory-mem0.md in this repo is still refused. Closing this would mean
+// and the retired Mem0 setup wording is still refused. Closing this would mean
 // applying path patterns to the paths array ONLY (the stronger option Mitchell
 // considered and did not pick), which would also stop catching a genuinely
 // pasted private path. Asserting the real behavior, not the desired one: a test

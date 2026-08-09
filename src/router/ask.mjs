@@ -37,7 +37,7 @@ function safeJson(result) {
     local: result.local,
     refused: result.refused || false,
     context: result.context
-      ? { sources: result.context.sources, memories: result.context.memories, skills: result.context.skills }
+      ? { sources: result.context.sources, skills: result.context.skills }
       : null,
     answer: result.answer,
   };

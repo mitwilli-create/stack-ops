@@ -22,7 +22,7 @@
  * the run. If NotebookLM is unreachable, the session is unauthenticated, or the
  * upload fails, this exits 0 with a loud stderr warning so the calling agent
  * still returns its report. Pass --strict to exit non-zero instead. This
- * mirrors the mem0 client's soft-fail posture for the same reason: an archival
+ * mirrors the archive publisher's soft-fail posture for the same reason: an archival
  * dependency must never be able to fail a research pass.
  *
  * Auth is a browser session written by `notebooklm login`, at

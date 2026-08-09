@@ -21,7 +21,7 @@
     "llm-memory"
   ],
   "_notes": {
-    "skipRepos": "llm-memory is the memory vault. Its post-commit hook rebuilds mem0 and /wrap already commits it every session; a second writer invites conflicts. Remove it here if you want it swept too.",
+    "skipRepos": "llm-memory is the memory vault. /wrap already commits it every session; a second writer invites conflicts. Remove it here if you want it swept too.",
     "commitPreexistingDirty": "false means the job commits ONLY files it changed itself. Your ~500 pre-existing dirty files stay dirty and are listed in the morning report. Setting this true would have the job commit your in-progress work unattended, which is the personal-data leak path flagged on 2026-08-06.",
     "model": "sonnet keeps 15 repos/night affordable on the subscription. Switch to opus if review depth matters more than throughput.",
     "providerFailoverAgent": "When Claude returns a provider availability, credential, quota, or weekly-limit failure before edits begin, this existing subscription-first adapter is invoked with the same prompt and repository. It must remain outside this public repository if its source lives in career-ops. A missing adapter is reported as a failed fallback, never as success.",

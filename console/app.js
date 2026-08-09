@@ -13,7 +13,6 @@ const elements = {
   send: $('#send-button'),
   route: $('#route-card'),
   memoryCount: $('#memory-count'),
-  recalledCount: $('#recalled-count'),
   skillsCount: $('#selected-skills'),
   connectors: $('#connector-list'),
   memoryState: $('#memory-state'),
@@ -98,7 +97,6 @@ function renderTrace(result = null) {
   if (!decision) {
     elements.route.innerHTML = '<span class="route-placeholder">No request yet</span>';
     elements.memoryCount.textContent = '0';
-    elements.recalledCount.textContent = '0';
     elements.skillsCount.textContent = '0';
     return;
   }
@@ -114,7 +112,6 @@ function renderTrace(result = null) {
   target.textContent = result.target?.handle || decision.selected?.handle || 'system-clock';
   elements.route.append(lane, task, target);
   elements.memoryCount.textContent = result.context?.sources?.length || 0;
-  elements.recalledCount.textContent = result.context?.memories?.length || 0;
   elements.skillsCount.textContent = result.context?.skills?.length || 0;
 }
 

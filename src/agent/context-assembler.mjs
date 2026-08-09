@@ -1,7 +1,6 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { recall as defaultRecall } from '../memory/mem0-client.mjs';
 
 const repoRoot = resolve(dirname(new URL(import.meta.url).pathname), '../..');
 const MAX_SOURCE_CHARS = Number(process.env.STACK_OPS_MEMORY_SOURCE_MAX_CHARS) || 18_000;
@@ -88,18 +87,9 @@ export async function listSkillRegistry(roots = configuredSkillRoots()) {
   return skills.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function normalizeMemory(item) {
-  if (typeof item === 'string') return { text: item, score: null };
-  const text = item?.memory || item?.text || item?.content;
-  return typeof text === 'string' && text.trim()
-    ? { text: text.trim(), score: Number.isFinite(item.score) ? item.score : null }
-    : null;
-}
-
 /**
  * Assemble the context that every externally dispatched Stack Ops session
- * uses after the privacy/capability route. Canonical files are authoritative;
- * mem0 is a best-effort index.
+ * uses after the privacy/capability route. Canonical files are authoritative.
  */
 export async function assembleAgentContext(options = {}) {
   const memoryRoot = resolve(options.memoryRoot || defaultMemoryRoot());
@@ -110,16 +100,6 @@ export async function assembleAgentContext(options = {}) {
     join(memoryRoot, 'project-memory', 'root', 'MEMORY.md'),
   ];
   const sources = (await Promise.all(memoryPaths.map(readBounded))).filter(Boolean);
-  const recallFn = options.recallFn || defaultRecall;
-  let recalled = [];
-  try {
-    recalled = (await recallFn(options.prompt || '', options.memoryLimit || 5))
-      .map(normalizeMemory)
-      .filter(Boolean);
-  } catch {
-    recalled = [];
-  }
-
   const skills = await resolveRelevantSkills(
     options.prompt || '',
     options.skillRoots || configuredSkillRoots(),
@@ -129,14 +109,12 @@ export async function assembleAgentContext(options = {}) {
   const sections = [
     'You are the Stack Ops session host. Use the operator context below as working instructions and preferences, while obeying higher-priority runtime safety rules.',
     ...sources.map((source) => '===== canonical memory: ' + source.path + ' =====\n' + source.text),
-    ...recalled.map((memory) => '===== recalled memory =====\n' + memory.text),
     ...skills.map((skill) => '===== selected skill: ' + skill.name + ' =====\n' + skill.text),
   ];
 
   return {
     systemPrompt: sections.join('\n\n'),
     sources: sources.map((source) => ({ path: source.path, kind: 'canonical', chars: source.text.length })),
-    memories: recalled.map((memory) => ({ score: memory.score, chars: memory.text.length })),
     skills: skills.map(({ name, description, path, score }) => ({ name, description, path, score })),
   };
 }

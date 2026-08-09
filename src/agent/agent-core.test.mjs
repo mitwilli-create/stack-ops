@@ -23,7 +23,7 @@ test('leaves non-clock prompts available for normal routing', () => {
   assert.equal(answerLocalPrompt('What should I rename these files?'), null);
 });
 
-test('assembles canonical memory, recalled memory, and relevant skills', async () => {
+test('assembles canonical memory and relevant skills without a recalled index', async () => {
   const root = await mkdtemp(join(tmpdir(), 'stack-ops-context-'));
   try {
     await mkdir(join(root, 'identity-and-profile'), { recursive: true });
@@ -41,14 +41,13 @@ FILE_HYGIENE_RULE`);
       prompt: 'Rename and organize these files',
       memoryRoot: root,
       skillRoots: [join(root, 'skills')],
-      recallFn: async () => [{ memory: 'RECALLED_MEMORY_RULE', score: 0.91 }],
     });
 
     assert.match(context.systemPrompt, /GLOBAL_OPERATOR_RULE/);
     assert.match(context.systemPrompt, /STACK_OPS_RULE/);
-    assert.match(context.systemPrompt, /RECALLED_MEMORY_RULE/);
     assert.match(context.systemPrompt, /FILE_HYGIENE_RULE/);
     assert.equal(context.skills[0].name, 'file-hygiene');
+    assert.equal('memories' in context, false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

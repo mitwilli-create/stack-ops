@@ -56,7 +56,6 @@ export function createSessionHost(options = {}) {
         taskType: decision.taskType,
         target: dispatched.target?.handle || decision.selected?.handle || null,
         memorySources: assembled.sources?.length || 0,
-        recalledMemories: assembled.memories?.length || 0,
         skills: assembled.skills?.map((skill) => skill.name) || [],
       };
       const updated = await options.store.appendMessage(session.id, {
