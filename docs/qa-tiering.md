@@ -1,92 +1,73 @@
 # QA tiering
 
-Two orthogonal QA layers: **code** (review bots) and **content** (detectors + a
-voice linter). Both operate as tiers, never as "one bot on everything" or "AI found
-no issues = ship."
+The default QA path is free, local, and deterministic. Paid review services are
+never automatic.
 
-## Code QA (decision G)
+## Code QA
 
-| Tier | Tool | When |
-|---|---|---|
-| Default (every repo) | **CodeRabbit** | always-on, diff-only, lowest noise |
-| Complex / critical repos | **+ Greptile** | full-codebase semantic index; higher catch, higher false-positive load |
-| Production-critical repos | **+ Qodo (merge-gate)** | only on genuinely high-stakes PRs (critical paths, risk labels, releases/migrations) |
+Every change follows this order:
 
-Routing is automated by `src/router/pr-reviewer-triage.mjs` (built on the router
-substrate): it returns the reviewer set for a PR from diff size, files touched,
-risk labels, and repo tier. **Anti-patterns it enforces:** never three bots on a
-small low-risk PR; never let "AI found no issues" be the only required check (CI +
-a human still gate). career-ops already runs CodeRabbit + Greptile + Qodo; the
-triage decides which fire per PR.
+1. Run the repository's tests.
+2. Run the repository's lint, type check, and static or security checks.
+3. Run `git diff --check`.
+4. Use `verification-before-completion` to confirm the checks actually exercised
+   the changed behavior.
+5. Use `mp-code-review` or `requesting-code-review` for a second perspective when
+   the change is large, high-risk, or has a written specification.
 
-### Provisioning status (2026-07-19)
+These checks use the repository toolchain and local review skills. They do not
+create a separate per-review vendor charge.
 
-- **CodeRabbit**: live, always-on. The only **repo-file** config (`.coderabbit.yaml`).
-- **Greptile**: signed up (complex-repo tier). Activated per-repo via its **GitHub App + dashboard**; no repo file.
-- **Qodo**: unblocked (production-critical merge-gate). Activated via its **GitHub App**, and enforced as a **required status check in branch protection**; no repo file (career-ops runs it dashboard-configured).
+### External review policy
 
-So only CodeRabbit is scaffolded in-repo. Turning on Greptile / Qodo for a repo is a GitHub-side step (install the App + add the required check). That is Mitchell's action.
+The router's default result is two local reviewers: `local-gates` and
+`local-review-skill`. No hosted reviewer is a required merge check.
 
-### Per-repo tier assignment (2026-07-19)
+Qodo is fully halted. It must not be invoked, re-authenticated, connected to a
+repository, or used as a merge gate. Greptile is blocked in the router as well.
 
-Criticality read from the environment (live launchd pipelines, public URLs, repo purpose), not asked.
+CodeRabbit is a temporary manual fallback through 2026-09-08 only. It requires
+Mitchell's approval for that specific run, a named provider, confirmed flat-rate
+billing with usage-based add-ons disabled, `automatic: false`, and a one-review
+limit. It must not run from a hook, scheduler, continuous-integration job, pull
+request comment, or unattended loop.
 
-| Repo | Signal | Tier | Bots |
-|---|---|---|---|
-| career-ops | dozens of live launchd pipelines + dashboard | Production-critical | CodeRabbit + Qodo (already wired; triage adds Greptile per-PR) |
-| storytellermitch-site | live public site (storytellermitch.com) | Production-critical | CodeRabbit + Qodo merge-gate |
-| voice-os | golden-file determinism, LangGraph pipeline | Complex | CodeRabbit + Greptile |
-| stack-ops | routing substrate, multi-module + tests | Complex | CodeRabbit + Greptile |
-| broll-pipeline | media pipeline | Complex | CodeRabbit + Greptile |
-| council-os | KB the agents read | Complex | CodeRabbit + Greptile |
-| relocation-os | personal planning | Standard | CodeRabbit only |
-| content-ops | content | Standard | CodeRabbit only |
-| mission-control | small utility | Standard | CodeRabbit only |
-| monolith | dormant feature branch | Standard | CodeRabbit only (add when reactivated) |
-| mesa | deferred (not adopted) | n/a | skip until the mem0 head-to-head |
+### Cost controls
 
-**Never three bots on one PR:** where a repo qualifies for two tiers (career-ops is both prod-critical and complex), `src/router/pr-reviewer-triage.mjs` picks the subset per PR by diff size / risk labels. `.coderabbit.yaml` was scaffolded into every repo that lacked one on 2026-07-19 (adapted from career-ops's churn-tuned baseline: `chill` profile, pinned correctness/security/data-integrity, process-boilerplate suppressed, `code_guidelines` off, `learnings` local). career-ops + relocation-os kept their existing configs; monolith (dormant) was skipped. The remaining work is the GitHub-side Greptile/Qodo activation per the tier table above.
+- Disable CodeRabbit's pay-as-you-go or usage-based add-on in its organization
+  billing settings.
+- Keep Qodo disconnected and deleted. Do not restore its integrations.
+- Keep automatic review disabled in every `.coderabbit.yaml`.
+- Do not use `@coderabbitai review`, Qodo review commands, Greptile, or hosted
+  reviewer buttons inside an unattended loop.
+- Stop a run when the provider exposes a usage warning, overage state, or unclear
+  billing mode.
 
-## Content QA (decision G)
+## Content QA
 
-**Keep:** Pangram (AI-detection, the one detector worth paying for; its low-FPR
-result is independently verified) + Originality (plagiarism, wired as a
-**REGULAR-firing** gate, not ad hoc). **Drop:** GPTZero + Sapling (redundant with
-Pangram; formally retire the keys in the secrets-file pass).
+Keep the existing deterministic content gates and human review. Detector output
+is triage, not truth, and no paid detector may become a blocking default without
+an explicit budget and a measured false-positive rate.
 
-Detection is **triage, not truth**: one paid detector + provenance logging + a
-private quarterly benchmark + a human editorial pass. **Never accuse on a detector's
-output alone.**
+## Voice linting
 
-## Voice linting: Vale → Voice OS
+`vale` validates prose against the voice rules. The byte-level prose scan remains
+the final check because Markdown parsing can omit inline text. Run both before
+shipping outward-facing material.
 
-`vale` validates prose against Mitchell's actual voice, not generic style. Config at
-`.vale.ini` + `styles/VoiceOS/`:
+## Router contract
 
-- **EmDash** (error): em/en dashes are banned in outward materials; the linter
-  fails on sight so the rule is enforced structurally, not by memory.
-<!-- vale VoiceOS.AntiSlop = NO -->
-- **AntiSlop** (warning): flags hype/slop vocabulary and the banned word "kill";
-<!-- vale VoiceOS.AntiSlop = YES -->
-  the anti-slop *process* (draft → cut 60-80% → rewrite in voice with concrete
-  facts → grep out hype) is what the warning nudges toward.
+`src/router/pr-reviewer-triage.mjs` is the policy source. Its default result is:
 
-Wire it into CI as a non-blocking check first (warnings), promote EmDash to a
-blocking gate on outward-facing docs. For the full corpus-measured voice pipeline
-(six-axis calibration, live QA gate) use the Voice OS system itself; Vale is the
-fast always-on pre-filter that catches the two hardest rules cheaply.
-
-```bash
-brew install vale
-vale --glob='!node_modules/**' .     # lint every prose file, not just docs/
+```js
+{
+  reviewers: ['local-gates', 'local-review-skill'],
+  mergeGate: null,
+}
 ```
 
-Two configuration facts that are load-bearing, both verified on 2026-07-20:
-
-- **`EmDash.yml` sets `scope: raw`.** Without it Vale's Markdown parser drops
-  matches inside soft-wrapped blocks containing inline code spans. Measured on
-  `docs/mcp-layer.md`: 3 of 11 caught by default, 11 of 11 with `scope: raw`.
-  A character ban needs a byte-level check, so verify it with
-  `grep -rn '[^\x00-\x7F]'`-style greps as well, never Vale alone.
-- **`vale docs/` is not the gate.** It leaves `README.md`, `src/router/README.md`
-  and `skills/` unchecked. README.md carried 4 errors while the repo looked clean.
+The CodeRabbit fallback requires `allowPaidReviewers: true`, a one-item
+`paidReviewers` list, and a `hostedApproval` object that names CodeRabbit,
+sets `billingMode: 'flat-rate'`, sets `automatic: false`, sets `maxReviews: 1`,
+and supplies a valid approval end date from the current date through
+2026-09-08. The router never routes Qodo or Greptile.
