@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mitchell.career-ops.chrome-debugging</string>
+
+    <!-- Keep a dedicated Chrome instance running on
+         http://127.0.0.1:9222 with the profile at
+         ~/Library/Application Support/career-ops-chrome-debug/.
+         Playwright agents (phase-B-prime-mechanical-enrich.mjs,
+         refresh-master per-contact handler) attach to this Chrome
+         over CDP, inheriting the LinkedIn login Mitchell set up
+         once via `node scripts/launch-debug-chrome.mjs --setup`. -->
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin/node</string>
+        <string>/Users/mitchellwilliams/Documents/career-ops/scripts/launch-debug-chrome.mjs</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mitchellwilliams/Documents/career-ops</string>
+
+    <!-- 2026-05-22 (Phase 6.5-CAD-1): converted from KeepAlive=true to the
+         nohup-wrapper pattern (Pattern F in ~/.claude/knowledge/brain/bug-class-catalog.md).
+         macOS Tahoe TCC kills KeepAlive=true daemons with EX_CONFIG=78. The
+         launch-debug-chrome.mjs script is already idempotent (probes port 9222
+         + returns early if up) and detaches Chrome via child.unref(), so the
+         plist just needs to fire it periodically. Pattern matches
+         dashboard-server-nohup-wrapper.plist + cloudflared-nohup-wrapper.plist.
+         AbandonProcessGroup=true keeps the detached Chrome alive when this
+         script exits. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>AbandonProcessGroup</key>
+    <true/>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/chrome-debugging.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/chrome-debugging.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/mitchellwilliams</string>
+    </dict>
+</dict>
+</plist>

@@ -1,0 +1,58 @@
+Adobe Acrobat DC
+Adobe Creative Cloud
+Adobe Digital Editions 4.5.app
+Adobe Digital Editions.app
+Adobe Media Encoder 2023
+Adobe Media Encoder 2024
+Adobe Media Encoder 2025
+Adobe Media Encoder 2026
+Adobe Premiere Pro 2023
+Adobe Premiere Pro 2024
+Adobe Premiere Pro 2025
+Adobe Premiere Pro 2026
+Amazon Chime.app
+Amazon Kindle.app
+Android Studio.app
+Brave Browser.app
+Chat AI.app
+Claude.app
+CodexBar.app
+Comet.app
+Cursor.app
+Discord.app
+Empower RET.app
+Epubor Kindle Converter.app
+GarageBand.app
+Google Chrome.app
+Google Docs.app
+Google Drive.app
+Google Sheets.app
+Google Slides.app
+Granola.app
+Keynote.app
+LibreOffice.app
+NordVPN.app
+Numbers.app
+OrbStack.app
+Pages.app
+Python 3.12
+Python 3.13
+Python 3.14
+Raycast.app
+Safari.app
+Spotify.app
+Thunderbird.app
+Utilities
+VOMO.app
+Webex.app
+WhatsApp.app
+WhatsApp.localized
+Wispr Flow.app
+Wondershare UniConverter 17.app
+calibre.app
+iMazing.app
+iMovie.app
+zoom.us.app
+Brave Browser Apps.localized
+Chrome Apps.localized
+Claude Code URL Handler.app

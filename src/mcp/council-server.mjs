@@ -38,6 +38,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve as resolvePath, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { z } from 'zod';
+import { routeRequest } from '../router/request-router.mjs';
 
 async function resolveEnginePath() {
   if (process.env.COUNCIL_ENGINE_PATH) return process.env.COUNCIL_ENGINE_PATH;
@@ -210,6 +211,27 @@ export function loadReportText(report, env = process.env) {
 }
 
 const server = new McpServer({ name: 'council', version: '0.2.0' });
+
+server.registerTool(
+  'route_request',
+  {
+    title: 'Route a natural-language request',
+    description: 'Classify a natural-language request into the Stack Ops toil, frontier, or local-only lane. Deterministic and read-only. No model call or spend.',
+    inputSchema: {
+      text: z.string().describe('the request text'),
+      paths: z.array(z.string()).optional().describe('paths referenced by the request'),
+      cwd: z.string().optional().describe('working directory'),
+      repo: z.string().optional().describe('repository or project identifier'),
+      kind: z.string().optional().describe('optional input kind such as image, audio, video, or pdf'),
+      taskType: z.string().optional().describe('optional explicit Stack Ops task type'),
+    },
+  },
+  async ({ text, paths, cwd, repo, kind, taskType }) => {
+    try {
+      return ok(await routeRequest({ text, paths, cwd, repo, kind, taskType }));
+    } catch (e) { return fail(String(e.message || e)); }
+  },
+);
 
 server.registerTool(
   'route_task',

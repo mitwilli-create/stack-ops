@@ -1,0 +1,425 @@
+diff --git a/lib/dashboard-weight-budget.mjs b/lib/dashboard-weight-budget.mjs
+index c3646b93..20146c0a 100644
+--- a/lib/dashboard-weight-budget.mjs
++++ b/lib/dashboard-weight-budget.mjs
+@@ -1,20 +1,45 @@
+-const BASELINE_EVALUATIONS = 180;
+-const BASE_WARN_BYTES = 12 * 1024 * 1024;
+-const BASE_FAIL_BYTES = 15 * 1024 * 1024;
+-const BYTES_PER_ADDITIONAL_EVALUATION = 12 * 1024;
++// Dashboard build-weight budget.
++//
++// The gate exists to catch the inline-payload-bloat bug class (bug-class-catalog
++// entry 3): contacts.json / pill-data.json / wave-cb.json getting baked into
++// index.html instead of served from /data. Those regressions are 2.4-3.6 MB
++// events, so the gate only needs to resolve deltas of roughly that size.
++//
++// CALIBRATION (2026-07-27). The previous model was `15 MB base + 12 KB per
++// evaluation past 180`. Both halves were wrong in opposite directions: the base
++// was ~2x more generous than reality, and the per-evaluation slope was less than
++// half the true marginal cost. The loose base masked the shallow slope until the
++// two lines crossed at ~687 evaluations, at which point a clean build with no
++// regression at all started failing the gate. Observed minified weights:
++//
++//   195 evaluations -> 7,421,581 bytes   (.claude/audit/closure-08-2026-05-22)
++//   710 evaluations -> 22,631,259 bytes  (proc-ms3ugjrl-b7046c, 2026-07-27)
++//
++// Fitting a line through those two points gives 29,533 bytes per evaluation and
++// a 1,662,646-byte fixed cost (chrome, inline scripts, styles). That model
++// predicts the 710-evaluation build to within 183 bytes, so per-evaluation cost
++// is stable enough to gate on a tight percentage band rather than a flat ceiling.
++//
++// The band is set so the smallest documented regression still trips it: baking
++// contacts.json back inline adds ~2.36 MB, which is +10.4% at 710 evaluations.
++// Hence fail at +10%. Warn at +5% to surface drift a build before it blocks.
++const BASE_BYTES = 1_662_646;
++const BYTES_PER_EVALUATION = 29_533;
++const WARN_TOLERANCE = 0.05;
++const FAIL_TOLERANCE = 0.10;
+ 
+ export function dashboardWeightBudget(evaluationCount) {
+   if (!Number.isSafeInteger(evaluationCount) || evaluationCount < 0) {
+     throw new TypeError('evaluationCount must be a non-negative integer');
+   }
+-  const additionalEvaluations = Math.max(
+-    0,
+-    evaluationCount - BASELINE_EVALUATIONS,
+-  );
+-  const growthAllowance =
+-    additionalEvaluations * BYTES_PER_ADDITIONAL_EVALUATION;
+-  return {
+-    warnBytes: BASE_WARN_BYTES + growthAllowance,
+-    failBytes: BASE_FAIL_BYTES + growthAllowance,
+-  };
++  const expectedBytes = BASE_BYTES + evaluationCount * BYTES_PER_EVALUATION;
++  const warnBytes = Math.round(expectedBytes * (1 + WARN_TOLERANCE));
++  const failBytes = Math.round(expectedBytes * (1 + FAIL_TOLERANCE));
++  // evaluationCount alone can be a safe integer while the derived budget is not.
++  // Silently returning an imprecise ceiling would make the gate compare against
++  // a number that does not mean what it says, so fail loudly instead.
++  if (![expectedBytes, warnBytes, failBytes].every(Number.isSafeInteger)) {
++    throw new RangeError('evaluationCount produces an unsafe byte budget');
++  }
++  return { expectedBytes, warnBytes, failBytes };
+ }
+diff --git a/scripts/apply-pack-cv-print.css b/scripts/apply-pack-cv-print.css
+index f6d4d5c8..25051a60 100644
+--- a/scripts/apply-pack-cv-print.css
++++ b/scripts/apply-pack-cv-print.css
+@@ -1,14 +1,18 @@
+ /* Apply-pack CV print lock: shared across every queue CV. */
+ @media print {
+   .rpillars {
+-    font-size: 11.5pt !important;
+-    line-height: 1.25 !important;
++    /* The descriptor directly under the name is a primary scan anchor. Keep
++       it visibly larger than the body without changing the underlying text. */
++    font-size: 13pt !important;
++    line-height: 1.2 !important;
+     font-weight: 700 !important;
+     letter-spacing: 0.02em !important;
+   }
+ 
+   .rrole-s {
+-    font-size: 9.5pt !important;
++    /* Employer/date metadata should sit on the same readable baseline as the
++       content immediately below it. */
++    font-size: 10.25pt !important;
+     line-height: 1.4 !important;
+     font-weight: 700 !important;
+     font-style: normal !important;
+@@ -19,8 +23,42 @@
+     font-size: 10.25pt !important;
+     line-height: 1.3 !important;
+     font-weight: 400 !important;
+-    font-style: normal !important;
+-    color: #232323 !important;
++    font-style: italic !important;
++    color: #6b645b !important;
++  }
++
++  /* Keep the newsroom summary explicitly locked to body size. */
++  .rrole-note,
++  .rrole > p.rp:first-of-type {
++    font-family: 'Martian Grotesk', sans-serif !important;
++    font-size: 10.25pt !important;
++    line-height: 1.3 !important;
++    font-weight: 400 !important;
++    font-style: italic !important;
++    color: #6b645b !important;
++  }
++
++  /* Explicitly lock the newsroom summary to the exact same computed size as
++     .rl li. This selector wins over every lane-specific site rule. */
++  .rrole-note,
++  .rrole-note *,
++  .rrole > p.rp:first-of-type {
++    font-family: 'Martian Grotesk', sans-serif !important;
++    font-size: 10.25pt !important;
++    line-height: 1.3 !important;
++    font-weight: 400 !important;
++    font-style: italic !important;
++    color: #6b645b !important;
++  }
++
++  /* Experience summaries sit immediately below the employer/date line. Give
++     every role the same editorial treatment as the newsroom summary: body
++     size, italic, and muted charcoal. */
++  .rrole > .rp:first-of-type {
++    font-size: 10.25pt !important;
++    line-height: 1.3 !important;
++    font-style: italic !important;
++    color: #6b645b !important;
+   }
+ 
+   .rsec-h {
+@@ -28,6 +66,19 @@
+     line-height: 1.15 !important;
+   }
+ 
++  /* Give the eye a clear reset between the last bullet of one section and the
++     next section label. This is print-only spacing; ATS text order is unchanged. */
++  section.rsec {
++    margin-top: 15pt !important;
++  }
++
++  /* Separate the short Summary paragraphs so each thought has a clear visual
++     landing point instead of reading as one dense block. */
++  .rsec-intro .rp {
++    /* A clean uninterrupted line break between each Summary paragraph. */
++    margin-bottom: 18pt !important;
++  }
++
+   .rp,
+   .rl li,
+   .rinit-h {
+@@ -69,4 +120,10 @@
+     text-decoration: none !important;
+     font-weight: 400 !important;
+   }
++
++  /* The portfolio site's audio control is useful on web pages but must never
++     leak into an application PDF as a floating SOUND button. */
++  .sound-toggle {
++    display: none !important;
++  }
+ }
+diff --git a/scripts/build-dashboard.mjs b/scripts/build-dashboard.mjs
+index 867140f9..b2fb59bb 100644
+--- a/scripts/build-dashboard.mjs
++++ b/scripts/build-dashboard.mjs
+@@ -97,6 +97,13 @@ const _CREDENTIALS_SNAPSHOT = (() => {
+   }
+ })();
+ 
++// Deep refresh projected cost — authoritative value surfaced in all per-row
++// and bulk deep-refresh modals, tooltips, CTAs, and confirm labels for the
++// apply-now queue. This must equal the `projected_cost_usd` returned by
++// POST /api/refresh-deep in dashboard-server.mjs (full 7-slot deep-council-7
++// + companions). Client never hardcodes a divergent range.
++const DEEP_REFRESH_PROJECTED_COST_USD = 105;
++
+ function _formatLatestCertMonth(certs) {
+   if (!certs || !certs.length) return '';
+   const dates = certs.map(c => c && c.earned_date).filter(Boolean).sort();
+@@ -4048,15 +4055,15 @@ function renderRow(r, idx) {
+         const _failed = fr.multi.slots_failed || [];
+         const _missing = fr.multi.slots_missing || [];
+         const _gap = [..._failed, ..._missing].slice(0, 4).join(', ');
+-        tip = 'Deep refresh is partial — ' + ageLabel + ' slots filled. Gap: ' + _gap + (_failed.length + _missing.length > 4 ? '…' : '') + '. Click for a 7-slot deep refresh to fill the gap ($25-$105).';
++        tip = 'Deep refresh is partial — ' + ageLabel + ' slots filled. Gap: ' + _gap + (_failed.length + _missing.length > 4 ? '…' : '') + '. Click for a 7-slot deep refresh to fill the gap ($' + DEEP_REFRESH_PROJECTED_COST_USD + ').';
+       } else {
+         tip = fr.status === 'stale'
+-          ? 'Intel ' + ageLabel + ' old (past 14d ceiling) — click for a 7-slot deep refresh ($25-$105)'
++          ? 'Intel ' + ageLabel + ' old (past 14d ceiling) — click for a 7-slot deep refresh ($' + DEEP_REFRESH_PROJECTED_COST_USD + ')'
+           : fr.status === 'cooling'
+-            ? 'Intel ' + ageLabel + ' old (approaching 14d) — click for a 7-slot deep refresh ($25-$105)'
++            ? 'Intel ' + ageLabel + ' old (approaching 14d) — click for a 7-slot deep refresh ($' + DEEP_REFRESH_PROJECTED_COST_USD + ')'
+             : fr.status === 'missing'
+-              ? 'No hm-intel cache for this row — click for the first 7-slot deep refresh ($25-$105)'
+-              : 'Intel ' + ageLabel + ' old (fresh) — click for a 7-slot deep refresh ($25-$105)';
++              ? 'No hm-intel cache for this row — click for the first 7-slot deep refresh ($' + DEEP_REFRESH_PROJECTED_COST_USD + ')'
++              : 'Intel ' + ageLabel + ' old (fresh) — click for a 7-slot deep refresh ($' + DEEP_REFRESH_PROJECTED_COST_USD + ')';
+       }
+       const num = htmlEscape(String(r.num || ''));
+       const company = htmlEscape(r.company || '');
+@@ -4265,11 +4272,11 @@ function renderRow(r, idx) {
+       })()}
+       <div class="drawer-slash-cmds" style="display:flex;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+         <!-- refresh-master Phase 3 deliverable 6: ↻ Deep refresh CTA. Fires
+-             full council-7 Layer-3 research. Confirm modal shows ~$25-$105 cost.
++             full council-7 Layer-3 research. Confirm modal cost matches server projected_cost_usd.
+              Closure 3.16 (2026-05-22): full-width horizontal bar per spec.
+              Phase 4.2 (2026-05-23): label now honest — names the 7 slots
+              /api/refresh-deep actually fires (--slots all). -->
+-        <button type="button" class="dcard-btn" style="background:linear-gradient(180deg,#1f2a44,#162035);border-color:#3b4f7a;color:#dbe4ff;width:100%;display:block;padding:8px 14px;font-weight:600" onclick="invokeDeepRefresh(${htmlEscape(String(r.num||''))}, this);event.stopPropagation()" title="Phase 3 Layer-3 deep research: 7-slot nuclear sweep — HM intel + toxicity + strategy + positioning + liveness + ATS detection + role enrichment. $25–$50 per fire. Confirm modal will appear.">↻ Deep Refresh</button>
++        <button type="button" class="dcard-btn" style="background:linear-gradient(180deg,#1f2a44,#162035);border-color:#3b4f7a;color:#dbe4ff;width:100%;display:block;padding:8px 14px;font-weight:600" onclick="invokeDeepRefresh(${htmlEscape(String(r.num||''))}, this);event.stopPropagation()" title="Phase 3 Layer-3 deep research: 7-slot nuclear sweep — HM intel + toxicity + strategy + positioning + liveness + ATS detection + role enrichment. $${DEEP_REFRESH_PROJECTED_COST_USD} per fire. Confirm modal will appear.">↻ Deep Refresh</button>
+       </div>
+     </div>
+   </td>
+@@ -5506,7 +5513,13 @@ async function build() {
+ 
+   // Sorted views
+   const sortedByScore = [...apps].sort((a, b) => b.score - a.score);
+-  const applyNowSorted = [...applyNow].sort((a, b) => b.score - a.score);
++  // Archived apply packs are removed from the actionable Apply-Now surface.
++  // Keep their historical application records available in All Evaluations,
++  // but do not present them as current queue work.
++  const archivedApplyPackNums = new Set(['2654', '2749', '2809', '3371', '3372', '3376', '3385', '3387', '3394']);
++  const applyNowSorted = [...applyNow]
++    .filter(r => !archivedApplyPackNums.has(String(r.num)))
++    .sort((a, b) => b.score - a.score);
+ 
+   // Score buckets
+   const buckets = { '4.0+': 0, '3.0-3.9': 0, '2.0-2.9': 0, '1.0-1.9': 0, '0-0.9': 0 };
+@@ -15043,13 +15056,13 @@ async function build() {
+       ${_deepRefreshStaleCount > 0 ? `<button type="button" id="apply-now-refresh-stale" class="refresh-stale-btn"
+         onclick="event.stopPropagation();openBulkDeepRefreshModal()"
+         aria-label="Open the bulk Deep Refresh modal for ${_deepRefreshStaleCount} apply-now row${_deepRefreshStaleCount === 1 ? '' : 's'} 7 days or older, never refreshed, or partially refreshed"
+-        title="Open Deep Refresh modal: ${_deepRefreshStaleCount} apply-now row${_deepRefreshStaleCount === 1 ? '' : 's'} 7 days or older (or never/partially refreshed) — all pre-checked. ~\$25-\$50 per row.">
++        title="Open Deep Refresh modal: ${_deepRefreshStaleCount} apply-now row${_deepRefreshStaleCount === 1 ? '' : 's'} 7 days or older (or never/partially refreshed) — all pre-checked. $${DEEP_REFRESH_PROJECTED_COST_USD} per row.">
+         ${String.fromCharCode(8635)} Refresh stale <span class="refresh-stale-count">${_deepRefreshStaleCount}</span>
+       </button>` : ''}
+       <button type="button" id="apply-now-refresh-all" class="refresh-stale-btn refresh-all-btn"
+         onclick="event.stopPropagation();openBulkDeepRefreshModal({ all: true })"
+         aria-label="Open the bulk Deep Refresh modal for every apply-now row"
+-        title="Manually deep-refresh the whole apply-now queue — every row pre-checked; uncheck any you want to skip. ~\$25-\$50 per row.">
++        title="Manually deep-refresh the whole apply-now queue — every row pre-checked; uncheck any you want to skip. $${DEEP_REFRESH_PROJECTED_COST_USD} per row.">
+         ${String.fromCharCode(8635)} Refresh all
+       </button>
+       <span class="panel-chevron">▾</span>
+@@ -34329,15 +34342,15 @@ window.invokeBuildPackStage = invokeBuildPackStage;
+ // ── refresh-master Phase 3 deliverable 6: ↻ Deep refresh CTA ──
+ // 2026-05-24 rewrite: native window.confirm() replaced with the rich
+ // #deep-refresh-modal (per-row + bulk variants). Same backend endpoint
+-// (POST /api/refresh-deep, 7-slot council=7 research, ~$25-$105 per row).
++// (POST /api/refresh-deep, 7-slot council=7 research).
+ //
+ // The drawer button kept its 'invokeDeepRefresh' name for backward compat
+ // — it now just opens the per-row modal. The per-row + bulk modals are
+ // the canonical surface for the cost-confirmation step (no more
+ // native browser confirm dialogs).
+-
+-const DEEP_REFRESH_PER_ROW_COST_LOW  = 25;
+-const DEEP_REFRESH_PER_ROW_COST_HIGH = 50;
++//
++// (Deep refresh cost constant is defined once near top of module so it is in
++// scope for renderRow and the modal functions.)
+ const DEEP_REFRESH_SLOTS = [
+   'hm-intel (council research)',
+   'toxicity composite',
+@@ -34398,7 +34411,8 @@ function openDeepRefreshModal(rowId, btn) {
+ 
+   titleEl.textContent = 'Deep refresh row #' + rowId;
+   subtitleEl.textContent = 'Layer-3 council=7 research on the full intel surface for this role.';
+-  confirmBtn.textContent = 'Fire deep refresh ($' + DEEP_REFRESH_PER_ROW_COST_LOW + '-$' + DEEP_REFRESH_PER_ROW_COST_HIGH + ')';
++  const _cost = DEEP_REFRESH_PROJECTED_COST_USD;
++  confirmBtn.textContent = 'Fire deep refresh ($' + _cost + ')';
+   confirmBtn.disabled = false;
+   confirmBtn.onclick = confirmDeepRefresh;
+ 
+@@ -34424,7 +34438,7 @@ function openDeepRefreshModal(rowId, btn) {
+     +   '<h4>Cost + time</h4>'
+     +   '<div class="drm-stat-grid">'
+     +     '<div class="drm-stat-label">Projected cost</div>'
+-    +     '<div class="drm-stat-value drm-cost-headline">$' + DEEP_REFRESH_PER_ROW_COST_LOW + '-$' + DEEP_REFRESH_PER_ROW_COST_HIGH + '</div>'
++    +     '<div class="drm-stat-value drm-cost-headline">$' + DEEP_REFRESH_PROJECTED_COST_USD + '</div>'
+     +     '<div class="drm-stat-label">ETA</div>'
+     +     '<div class="drm-stat-value">3-8 minutes</div>'
+     +   '</div>'
+@@ -34516,8 +34530,8 @@ function openBulkDeepRefreshModal(opts) {
+     +   '<h4>Rows queued for refresh</h4>'
+     +   rowsHtml
+     + '</div>'
+-    + '<div class="drm-budget"><span class="drm-budget-label">Selected · projected cost</span><span class="drm-budget-val" id="drm-bulk-cost">$0-$0</span></div>'
+-    + '<div class="drm-warn"><strong>This will fire sequentially.</strong> Each row takes 3-8 min + costs $25-$105. The modal stays open + reports per-row status as each one completes. You can close the modal to detach — the jobs keep running on the server.</div>'
++    + '<div class="drm-budget"><span class="drm-budget-label">Selected · projected cost</span><span class="drm-budget-val" id="drm-bulk-cost">$' + (rows.filter(r => r.selected).length * DEEP_REFRESH_PROJECTED_COST_USD) + '</span></div>'
++    + '<div class="drm-warn"><strong>This will fire sequentially.</strong> Each row takes 3-8 min + costs $' + DEEP_REFRESH_PROJECTED_COST_USD + '. The modal stays open + reports per-row status as each one completes. You can close the modal to detach — the jobs keep running on the server.</div>'
+     + '<div class="drm-section" id="deep-refresh-status-region" hidden style="margin-top:14px">'
+     +   '<h4>Status</h4>'
+     +   '<div id="deep-refresh-status-msg"></div>'
+@@ -34540,16 +34554,15 @@ function drmRecomputeCost() {
+   const checks = document.querySelectorAll('.drm-row-check');
+   let n = 0;
+   checks.forEach(c => { if (c.checked) n += 1; });
+-  const lo = n * DEEP_REFRESH_PER_ROW_COST_LOW;
+-  const hi = n * DEEP_REFRESH_PER_ROW_COST_HIGH;
++  const total = n * DEEP_REFRESH_PROJECTED_COST_USD;
+   const costEl = document.getElementById('drm-bulk-cost');
+-  if (costEl) costEl.textContent = n + ' row' + (n === 1 ? '' : 's') + ' · $' + lo + '-$' + hi;
++  if (costEl) costEl.textContent = n + ' row' + (n === 1 ? '' : 's') + ' · $' + total;
+   const confirmBtn = document.getElementById('deep-refresh-confirm');
+   if (confirmBtn) {
+     confirmBtn.disabled = n === 0;
+     confirmBtn.textContent = n === 0
+       ? 'Select at least one row'
+-      : 'Fire ' + n + ' deep refresh' + (n === 1 ? '' : 'es') + ' ($' + lo + '-$' + hi + ')';
++      : 'Fire ' + n + ' deep refresh' + (n === 1 ? '' : 'es') + ' ($' + total + ')';
+   }
+ }
+ window.drmRecomputeCost = drmRecomputeCost;
+@@ -41417,9 +41430,20 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+     const FAIL_BYTES = parseInt(process.env.DASHBOARD_WEIGHT_FAIL_BYTES || String(weightBudget.failBytes), 10);
+     if (minBytes > FAIL_BYTES) {
+       console.error('');
++      // Deliberately measured against the modelled cost curve, not against
++      // FAIL_BYTES: the distance from the model is what says whether this is a
++      // regression or ordinary growth, whereas the distance from the ceiling is
++      // near zero at the boundary and diagnoses nothing. A stricter
++      // DASHBOARD_WEIGHT_FAIL_BYTES override can put the ceiling below the
++      // model, so the delta is signed and worded both ways.
++      const deltaBytes = minBytes - weightBudget.expectedBytes;
++      const deltaPct = (deltaBytes / weightBudget.expectedBytes) * 100;
++      const direction = deltaBytes >= 0 ? 'over' : 'under';
+       console.error(`✗ build-dashboard: minified weight ${minBytes.toLocaleString()} bytes EXCEEDS the ${FAIL_BYTES.toLocaleString()}-byte hard ceiling.`);
++      console.error(`  Expected ~${weightBudget.expectedBytes.toLocaleString()} bytes for ${total.toLocaleString()} evaluations — this build is ${Math.abs(deltaBytes).toLocaleString()} bytes (${Math.abs(deltaPct).toFixed(1)}%) ${direction} the modelled cost curve.`);
+       console.error(`  Likely cause: an inline-payload regression (see ~/.claude/knowledge/brain/bug-class-catalog.md § inline-payload-bloat).`);
+       console.error(`  Check externalization paths: contacts.json, pill-data.json, wave-cb.json — those should be served from /data, not baked.`);
++      console.error(`  If those are all externalised and the overage still looks like ordinary per-row growth, the cost model in lib/dashboard-weight-budget.mjs needs recalibrating — do NOT just raise the ceiling without re-fitting it.`);
+       console.error(`  Bypass via DASHBOARD_SKIP_WEIGHT_GATE=1 (emergency only).`);
+       process.exit(1);
+     } else if (minBytes > WARN_BYTES) {
+diff --git a/tests/unit/dashboard-weight-budget.test.mjs b/tests/unit/dashboard-weight-budget.test.mjs
+index e7c81169..a435dd71 100644
+--- a/tests/unit/dashboard-weight-budget.test.mjs
++++ b/tests/unit/dashboard-weight-budget.test.mjs
+@@ -3,21 +3,67 @@ import test from 'node:test';
+ 
+ import { dashboardWeightBudget } from '../../lib/dashboard-weight-budget.mjs';
+ 
+-test('dashboard weight budget preserves the original baseline ceiling', () => {
+-  assert.deepEqual(dashboardWeightBudget(180), {
+-    warnBytes: 12 * 1024 * 1024,
+-    failBytes: 15 * 1024 * 1024,
+-  });
++// Calibration anchors: real minified weights from two builds two months apart.
++// See lib/dashboard-weight-budget.mjs for provenance.
++const ANCHORS = [
++  { evaluations: 195, observedBytes: 7_421_581 },
++  { evaluations: 710, observedBytes: 22_631_259 },
++];
++
++test('budget model predicts observed builds to within 1%', () => {
++  for (const { evaluations, observedBytes } of ANCHORS) {
++    const { expectedBytes } = dashboardWeightBudget(evaluations);
++    const drift = Math.abs(expectedBytes - observedBytes) / observedBytes;
++    assert.ok(
++      drift <= 0.01,
++      `${evaluations} evaluations: predicted ${expectedBytes}, observed ${observedBytes} (${(drift * 100).toFixed(2)}% drift)`,
++    );
++  }
++});
++
++test('a clean build at the observed weight passes the gate', () => {
++  for (const { evaluations, observedBytes } of ANCHORS) {
++    const { failBytes, warnBytes } = dashboardWeightBudget(evaluations);
++    assert.ok(
++      observedBytes < warnBytes,
++      `${evaluations} evaluations: clean build ${observedBytes} should not even warn (warn at ${warnBytes})`,
++    );
++    assert.ok(observedBytes < failBytes);
++  }
+ });
+ 
+-test('dashboard weight budget allows bounded growth for rendered evaluations', () => {
+-  const budget = dashboardWeightBudget(584);
++// The gate's whole purpose. Re-inlining contacts.json (~2.36 MB) is the
++// smallest documented instance of the inline-payload-bloat bug class.
++test('gate still catches the smallest documented inline-payload regression', () => {
++  const CONTACTS_JSON_BYTES = 2_363_519;
++  const { evaluations, observedBytes } = ANCHORS[1];
++  const { failBytes } = dashboardWeightBudget(evaluations);
++
++  assert.ok(
++    observedBytes + CONTACTS_JSON_BYTES > failBytes,
++    `re-inlining contacts.json must fail the gate (would be ${observedBytes + CONTACTS_JSON_BYTES}, ceiling ${failBytes})`,
++  );
++});
+ 
+-  assert.ok(budget.failBytes > 19_033_534);
+-  assert.ok(budget.failBytes < 21 * 1024 * 1024);
+-  assert.equal(
+-    budget.failBytes - 15 * 1024 * 1024,
+-    (584 - 180) * 12 * 1024,
++test('budget grows monotonically with evaluation count', () => {
++  let previous = 0;
++  for (const n of [0, 180, 400, 710, 1000, 5000]) {
++    const { failBytes } = dashboardWeightBudget(n);
++    assert.ok(failBytes > previous);
++    previous = failBytes;
++  }
++});
++
++test('warn ceiling sits below the fail ceiling', () => {
++  const { expectedBytes, warnBytes, failBytes } = dashboardWeightBudget(710);
++  assert.ok(expectedBytes < warnBytes);
++  assert.ok(warnBytes < failBytes);
++});
++
++test('budget rejects counts whose derived byte budget is not a safe integer', () => {
++  assert.throws(
++    () => dashboardWeightBudget(Number.MAX_SAFE_INTEGER),
++    /unsafe byte budget/,
+   );
+ });
+ 

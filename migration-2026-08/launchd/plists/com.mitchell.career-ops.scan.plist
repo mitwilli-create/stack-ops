@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mitchell.career-ops.scan</string>
+
+        <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-lc</string>
+        <string>export NVM_DIR=&quot;$HOME/.nvm&quot;; [ -s &quot;$NVM_DIR/nvm.sh&quot; ] &amp;&amp; . &quot;$NVM_DIR/nvm.sh&quot;; exec node &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/launchd-wrapper.mjs&apos; &apos;--label=com.mitchell.career-ops.scan&apos; &apos;--max-retries=0&apos; &apos;--retry-backoff-sec=60&apos; &apos;--&apos; &apos;node&apos; &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/scan-unattended.mjs&apos;</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mitchellwilliams/Documents/career-ops</string>
+
+    <!-- Phase 6.5 (2026-05-23): switched from StartCalendarInterval { Hour=2 Minute=0 }
+         to StartInterval=86400 (24 hours). StartCalendarInterval has no catch-up
+         semantics on macOS — if the Mac sleeps through 02:00 PT, the scan is
+         silently lost. StartInterval DOES catch up after sleep (per Apple launchd
+         docs). Tradeoff: the firing time after plist load is "load time + 24h"
+         and drifts over weeks. Mitchell's scan window is "overnight," not
+         "exactly 02:00 PT," so the drift is acceptable in exchange for never
+         silently missing a day. -->
+    <key>StartInterval</key>
+    <integer>86400</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Log path MUST live outside ~/Documents/ - macOS Tahoe TCC blocks
+         launchd from writing to log files under Documents (silent EX_CONFIG=78).
+         Pattern F / feedback_tahoe_sandbox_calendar_interval.md. Fixed 2026-05-22. -->
+    <key>StandardOutPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/scan-launchd.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/scan-launchd.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/mitchellwilliams</string>
+    </dict>
+</dict>
+</plist>

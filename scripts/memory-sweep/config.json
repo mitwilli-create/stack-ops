@@ -1,0 +1,44 @@
+{
+  "vaultRoot": "/Users/mitchellwilliams/Documents/llm-memory",
+  "logDir": "/Users/mitchellwilliams/Library/Logs/stack-ops/memory-sweep",
+  "claudeBin": "/Users/mitchellwilliams/.claude/bin/claude",
+  "model": "sonnet",
+  "effort": "medium",
+  "perProjectTimeoutMs": 600000,
+  "globalDeadlineMs": 5400000,
+  "sweepCostCapUsd": 4,
+  "layers": {
+    "indices": true,
+    "facts": true,
+    "sessions": true
+  },
+  "sessionCompaction": {
+    "olderThanDays": 30,
+    "minRecordsPerMonth": 4
+  },
+  "budgets": {
+    "memoryTargetBytes": 6000,
+    "memoryCapBytes": 8000,
+    "sessionsTargetBytes": 24000,
+    "sessionsCapBytes": 32000
+  },
+  "skipProjects": [],
+  "_notes": {
+    "design": "The model never writes to the vault. It returns a typed plan (merge_facts, supersede, rewrite_index, compact_sessions) and this script validates and applies each operation mechanically. That is what makes an unattended memory rewrite auditable and revertible.",
+    "safety": "A file is eligible only if it is TRACKED and CLEAN in git. Untracked files are not recoverable if a merge goes wrong, and dirty files belong to one of the 10-30 concurrent sessions writing this vault. Both are skipped and reported, never rewritten.",
+    "sessions": "Compaction digests per project per month, and deletes the originals ONLY because all 848 are git-tracked, so history remains the audit trail. Verified 2026-08-06: 0 of 848 untracked.",
+    "never_delete": "A fact file is never deleted. A merged one is replaced by a tombstone pointing at the canonical file, so every old link still resolves.",
+    "sweepCostCapUsd": "Hard ceiling per run. Pilot measured $0.38-0.53 per project. With change-detection most runs touch only the 1-3 projects that actually moved, so a typical run is well under $1; the cap bounds the worst case at 4 runs/day to about $16/day.",
+    "cadence": "Every 6h via launchd. node is the entrypoint because TCC grants are per-binary: /bin/zsh is denied ~/Documents under launchd, node at its absolute path is granted. Verified by probe 2026-08-06.",
+    "forceAfterHours": "A project unchanged since its last sweep is skipped and costs nothing. This forces a pass anyway after 168h (7 days) so a stale index cannot hide behind unchanged forever.",
+    "mergeCompressionFloor": "A merged body must keep at least 40% of the combined bytes of its sources. The first live run cut 8733B to 1287B (15%) while claiming no facts were lost, having dropped Composer from the flat-rate routing rule. Deduplication removes repetition, not content.",
+    "strayDrain": "Scheduled drain of unwrapped transcripts. /wrap only mines 8 per run because it reads each into the live session's context, so the backlog outran it and sessions began declining the work. maxPerRun bounds one run; the job is restartable and the ledger prevents double-mining. Summarisation routes to the cheap open-weight tier at roughly $0.004 per transcript; transcripts the privacy gate refuses are re-run with --engine claude so they bill the subscription and never leave the machine."
+  },
+  "forceAfterHours": 168,
+  "mergeCompressionFloor": 0.4,
+  "strayDrain": {
+    "maxPerRun": 400,
+    "concurrency": 16,
+    "timeoutMs": 3600000
+  }
+}

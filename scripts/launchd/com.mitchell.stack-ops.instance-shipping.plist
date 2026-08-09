@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        The observer runs in apply mode after the dry-run and canary have been
+        verified. The short interval lets an active instance publish during
+        the session, not only during the nightly sweep.
+    -->
+    <key>Label</key>
+    <string>com.mitchell.stack-ops.instance-shipping</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin/node</string>
+        <string>/Users/mitchellwilliams/Documents/stack-ops/scripts/instance-shipping/instance-shipping.mjs</string>
+        <string>--once</string>
+        <string>--apply</string>
+        <string>--config</string>
+        <string>/Users/mitchellwilliams/Documents/stack-ops/scripts/instance-shipping/config.json</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/mitchellwilliams/Documents</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>60</integer>
+    <key>KeepAlive</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/stack-ops/instance-shipping/launchd.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/stack-ops/instance-shipping/launchd.err</string>
+</dict>
+</plist>

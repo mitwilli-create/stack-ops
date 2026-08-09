@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        com.mitchell.stack-ops.stray-drain
+
+        Drains unwrapped Claude Code transcripts into vault session records at
+        01:30 and 13:30 PT, half an hour ahead of nightly-hygiene.
+
+        WHY IT IS SCHEDULED. /wrap mines at most 8 strays per run, because it
+        reads each transcript into the INTERACTIVE session's context. That cap is
+        a context budget, not a correctness bound, so the backlog outran it: on
+        2026-08-07 there were 871 unwrapped transcripts against a 3,190-entry
+        ledger. What then happens is a live session finding hundreds of strays,
+        correctly judging that mining them is too much context-heavy work for an
+        already-drifting model, and declining. Reporting a stray count is not
+        capturing the information. Draining is mechanical and bounded, so it
+        belongs on a schedule and not in anyone's context window.
+
+        ROUTING. Summarisation goes to the cheap open-weight tier via `cheap
+        --task bulk_summarize`, measured at about $0.004 per transcript. The
+        privacy gate refuses transcripts referencing .env, .secrets, .zshrc or a
+        credential vault; those are re-run with --engine claude, which routes
+        through ~/.claude/bin/claude so they bill the SUBSCRIPTION and the
+        content never reaches a third party. Never make claude the general
+        engine here: that is a metered-billing path for bulk toil.
+
+        SAFETY. Never deletes a transcript. Claims each through the locked wrap
+        ledger so concurrent /wrap runs cannot double-mine. Commits only new
+        session records by explicit path, never `git add -A`, because 10 to 30
+        concurrent sessions write this vault.
+
+        node is the entrypoint because TCC grants are per binary: /bin/zsh under
+        launchd is denied ~/Documents, node at its absolute path is granted, and
+        children inherit the grant. Log paths live OUTSIDE ~/Documents per the
+        2026-05-21 sandbox finding.
+
+        Bootstrap:
+          mkdir -p ~/Library/Logs/stack-ops/stray-drain
+          cp scripts/launchd/com.mitchell.stack-ops.stray-drain.plist ~/Library/LaunchAgents/
+          launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mitchell.stack-ops.stray-drain.plist
+
+        Run by hand:
+          node ~/Documents/stack-ops/scripts/memory-sweep/stray-drain.mjs --dry-run
+    -->
+
+    <key>Label</key>
+    <string>com.mitchell.stack-ops.stray-drain</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin/node</string>
+        <string>/Users/mitchellwilliams/Documents/stack-ops/scripts/memory-sweep/stray-drain.mjs</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mitchellwilliams</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key>
+            <integer>1</integer>
+            <key>Minute</key>
+            <integer>30</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>13</integer>
+            <key>Minute</key>
+            <integer>30</integer>
+        </dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/stack-ops/stray-drain/launchd.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/stack-ops/stray-drain/launchd.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/mitchellwilliams/.claude/bin:/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/mitchellwilliams</string>
+    </dict>
+</dict>
+</plist>

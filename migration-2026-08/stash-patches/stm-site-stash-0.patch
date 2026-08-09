@@ -1,0 +1,237 @@
+diff --git a/assets/site-data/picture-lock-run.json b/assets/site-data/picture-lock-run.json
+index 46fdb76..3472f0d 100644
+--- a/assets/site-data/picture-lock-run.json
++++ b/assets/site-data/picture-lock-run.json
+@@ -1,5 +1,5 @@
+ {
+- "_provenance": "Distilled from picture-lock output/run-manifest.json as committed in the public repo (run started 2026-07-09T02:50:17.107Z, 60 logged calls). Stage costs = live spend plus original cost carried by cached artifacts. Receipt line items sum to $8.26 and reconcile line for line against the committed manifest.",
++ "_provenance": "Distilled from picture-lock output/run-manifest.json as committed in the public repo (run started 2026-07-09T02:50:17.107Z, 60 logged calls). Stage costs = live spend plus original cost carried by cached artifacts (per-call costUsd + originalCostUsd). Receipt line items sum to $8.26 and reconcile line for line against the committed manifest: live spend $0.7786 + carried $7.4861 = $8.2647. The dub stage below is NOT part of this run; see its inThisRun flag and the _reconciliation note.",
+  "started": "2026-07-09T02:50:17.107Z",
+  "script": "input/script.md",
+  "totalCalls": 60,
+@@ -71,11 +71,12 @@
+   {
+    "id": "dub",
+    "label": "dub",
+-   "detail": "Spanish cut, earlier logged run",
++   "detail": "Spanish cut, separate live run 2026-07-08 (commit 2e51d27)",
+    "calls": 1,
+-   "cached": 1,
+-   "costUsd": 0.44,
+-   "api": "Dubbing API"
++   "cached": 0,
++   "costUsd": 0.42,
++   "api": "Dubbing API",
++   "inThisRun": false
+   }
+  ],
+  "receipt": {
+@@ -99,8 +100,9 @@
+    }
+   ],
+   "artifactsTotalUsd": 8.26,
+-  "allInNote": "incl. extra re-rolls, score + foley experiments, Spanish dub",
+-  "atBuildNote": "at-build ledger ran to about $14 incl. discarded re-rolls, score + foley experiments, and Spanish dub renders; that spend is not carried by the committed manifest"
++  "allInNote": "incl. extra re-rolls, score + foley experiments",
++  "atBuildNote": "at-build ledger ran to about $14 incl. discarded re-rolls, score + foley experiments, and Spanish dub renders; that spend is not carried by the committed manifest",
++  "dubNote": "the Spanish dub is a separate $0.42 live render (2026-07-08, commit 2e51d27), not a line in this receipt"
+  },
+- "_reconciliation": "Receipt lines aggregate the committed run-manifest snapshot: audio 0.28 + shots 4.40 + direction 3.50 + review 0.08 = 8.26 (artifactsTotalUsd). Build-time extras (discarded re-rolls, score/foley experiments, dub renders) were logged as they ran (~$14 at build) but are not carried by the committed manifest; the video's beat-12 receipt frame baked the at-cut manifest state ($9.51 carried) before a post-cut re-render consolidated the ledger."
++ "_reconciliation": "Receipt lines aggregate the committed run-manifest snapshot: audio 0.28 + shots 4.40 + direction 3.50 + review 0.08 = 8.26 (artifactsTotalUsd). Summing the committed manifest reproduces it: per-call costUsd (live spend, 0.7786) + originalCostUsd (carried by cached artifacts, 7.4861) = 8.2647 across all 60 calls. Stage rows here are a coarser grouping of the manifest's own stages: council 3.59 = council 3.5042 + review 0.0846; sfx 0.07 = sfx 0.0180 + ambience 0.0560. THE SPANISH DUB IS NOT IN THIS RUN: the committed manifest has no dub stage at all (its only 'dub' string is a mograph title card, template 'dub-card', cached, $0). The dub rendered LIVE on 2026-07-08 from the same script for $0.4201, logged in the manifest committed at 2e51d27 (dubbing_id dzc6VNLa9wuUDBkOOoTx, out output/short.es.mp4). Do NOT add the dub into the headline figure: $8.26 is the cut, the dub is cited separately. Adding the stage rows including dub yields $8.68, a number that appears nowhere and should not be published. Build-time extras (discarded re-rolls, score/foley experiments, dub renders) were logged as they ran (~$14 at build) but are not carried by the committed manifest; the video's beat-12 receipt frame baked the at-cut manifest state ($9.51 carried) before a post-cut re-render consolidated the ledger."
+ }
+\ No newline at end of file
+diff --git a/assets/starter-kit/cost-model.md b/assets/starter-kit/cost-model.md
+index fc55015..5728a6f 100644
+--- a/assets/starter-kit/cost-model.md
++++ b/assets/starter-kit/cost-model.md
+@@ -25,7 +25,7 @@ The published 53-second cut, as its manifest ledger prints it:
+ | Carried by the artifacts in the cut | $8.26 | sum of the four lines above; summing the committed manifest reproduces it |
+ | At-build ledger, with the discarded re-rolls, score and foley experiments, and the Spanish dub renders | ~$14 | logged at build time; not carried by the committed manifest |
+ 
+-Two details worth knowing before you budget: the demo's 75-second music bed logged $0.14 against a $0.19 rate-sheet estimate (the manifest logs what the call actually recorded; when the two disagree, the manifest wins), and the logged Spanish dub came to $0.44 for the 53-second cut, inside the published range. Creative direction is an Anthropic API cost, not an ElevenLabs one; it is in the ledger because the manifest logs every call, whoever bills it.
++Two details worth knowing before you budget: the demo's 75-second music bed logged $0.14 against a $0.19 rate-sheet estimate (the manifest logs what the call actually recorded; when the two disagree, the manifest wins), and the logged Spanish dub came to $0.42 for the 53-second cut, inside the published range and against a ~$0.44 estimate. The dub is not part of the $8.26 above: it rendered on its own earlier run and the final cut reused the artifact, so it carries a separate receipt. Creative direction is an Anthropic API cost, not an ElevenLabs one; it is in the ledger because the manifest logs every call, whoever bills it.
+ 
+ ## The math that matters for a customer
+ 
+diff --git a/fit.html b/fit.html
+index 8e4e4dd..7dc53fc 100644
+--- a/fit.html
++++ b/fit.html
+@@ -183,7 +183,7 @@
+         <div class="r-body">
+           <p class="r-fit">The forward-deployed loop is the job I've done for years under a different name: embed with a team, learn their pipeline, build the thing that replaces the slow part, package it so it travels, <a href="comms-triage-agent.html">teach them to run it</a>. Some companies post it as Forward Deployed Engineer; the work is the same loop.</p>
+           <p class="r-fit">I spent <a href="timeline.html#era-wdrb">a decade embedded in live newsrooms</a>, where the workflow was the product.</p>
+-          <p class="r-fit">My PictureLock shows the whole loop: a 7-stage pipeline on the ElevenLabs stack, public on GitHub, with a costed 53-second live demo covering narration, score, sound, creative-directed generated shots, and a Spanish dub; the artifacts in the cut carry $8.26 of logged cost in the committed run manifest.</p>
++          <p class="r-fit">My PictureLock shows the whole loop: a 7-stage pipeline on the ElevenLabs stack, public on GitHub, with a costed 53-second live demo covering narration, score, sound, and creative-directed generated shots; the artifacts in the cut carry $8.26 of logged cost in the committed run manifest, and the Spanish dub carries a separately logged $0.42.</p>
+           <p class="r-fit">The prototype isn't a deck. It ships with receipts.</p>
+           <div class="r-links">
+             <a href="for-elevenlabs.html">the 12-minute review path</a>
+diff --git a/for-anthropic.html b/for-anthropic.html
+index 6e88219..3e28655 100644
+--- a/for-anthropic.html
++++ b/for-anthropic.html
+@@ -85,7 +85,7 @@
+       <div class="step reveal"><span class="d">02 · 2 min</span><span class="t"><b><a href="comms.html#the-seat-i-held">Read the internal-storytelling record.</a></b> Eight years at Google telling the story of the people and the work from the inside: communications lead for the org of 1,000+ Principal, Distinguished, and Fellow engineers, the 600-person Sr. Tech IC Summit, quarterly forums, the engineering newsletters, and Day-One technical orientation rebuilt into self-service onboarding for 75,000+ new hires at 88% CSAT.</span></div>
+       <div class="step reveal"><span class="d">03 · 2 min</span><span class="t"><b><a href="content-ops.html">Check the format range.</a></b> Video, audio, live broadcast, written, workshops, stage programming. The <a href="content-ops.html">content-ops teardown</a> shows one story shaped for every surface it lands on, drafts through publish; the <a href="writing.html">writing room</a> carries the written work word for word.</span></div>
+       <div class="step reveal"><span class="d">04 · 1 min</span><span class="t"><b><a href="stories.html">Spot-check the fast-turn proof.</a></b> A decade of one-shot live television: launch nights, breaking coverage, field pieces cut under deadline. The case files carry the receipts.</span></div>
+-      <div class="step reveal"><span class="d">05 · 2 min</span><span class="t"><b><a href="picture-lock.html">See the AI production leverage.</a></b> When the format has to be made, I make it: a seven-stage pipeline turns one script into a produced, captioned, dubbed short for $8.26 of logged API cost. Rough edges are fine if the story is true, useful, and shipped; the gates catch what matters.</span></div>
++      <div class="step reveal"><span class="d">05 · 2 min</span><span class="t"><b><a href="picture-lock.html">See the AI production leverage.</a></b> When the format has to be made, I make it: a seven-stage pipeline turns one script into a produced, captioned short for $8.26 of logged API cost, with the Spanish dub receipted separately at $0.42. Rough edges are fine if the story is true, useful, and shipped; the gates catch what matters.</span></div>
+       <div class="step reveal"><span class="d">06 · 1 min</span><span class="t"><b><a href="resume/content-editorial.html">Open the resume.</a></b> Two pages, tuned to content production and editorial leadership.</span></div>
+       <div class="step reveal"><span class="d">07</span><span class="t"><b><a href="mailto:mitwilli@gmail.com?subject=Internal%20Content%20Producer%20%C2%B7%20Mitchell%20Williams">Talk.</a></b> mitwilli@gmail.com. I read every email myself and answer within 24 hours.</span></div>
+     </div>
+diff --git a/for-elevenlabs.html b/for-elevenlabs.html
+index 4355acd..186c712 100644
+--- a/for-elevenlabs.html
++++ b/for-elevenlabs.html
+@@ -143,7 +143,7 @@
+   <div class="wrap">
+     <h2 class="mini">The path</h2>
+     <div class="path">
+-      <div class="step reveal"><span class="d">01 · 2 min</span><span class="t"><b><a href="picture-lock.html">Watch the short.</a></b> A 53-second creative-directed piece produced by a seven-stage pipeline on the ElevenLabs stack: text-to-speech narration, Eleven Music score, Sound Effects, and a Spanish dub, for $8.26 of logged API cost. A Japanese cut was dubbed later through the same stage. The player sits at the top of the teardown; flip the dub toggle.</span></div>
++      <div class="step reveal"><span class="d">01 · 2 min</span><span class="t"><b><a href="picture-lock.html">Watch the short.</a></b> A 53-second creative-directed piece produced by a seven-stage pipeline on the ElevenLabs stack: text-to-speech narration, Eleven Music score, and Sound Effects, for $8.26 of logged API cost. The Spanish dub carries its own logged receipt at $0.42, and a Japanese cut was dubbed later through the same stage. The player sits at the top of the teardown; flip the dub toggle.</span></div>
+       <div class="step reveal"><span class="d">02 · 2 min</span><span class="t"><b><a href="picture-lock.html#flows">Read the Flows mapping.</a></b> The same pipeline drawn as an ElevenCreative Flows template: which stages become Flows nodes, which ElevenLabs model powers each audio node, what stays in external orchestration and why, and how the whole thing ships to a customer team as a reusable template.</span></div>
+       <div class="step reveal"><span class="d">03 · 5 min</span><span class="t"><b><a href="work.html#starthere">Scan the reel.</a></b> Four curated pieces, the AI-native short first, then the broadcast proof: a 50-million-view explainer, a Hurricane Maria field piece whose coverage fed a congressional FEMA probe, and a Google recruitment film. Each tile carries the role I held and why the piece matters here. A 70-clip archive sits below the four on that page.</span></div>
+       <div class="step reveal"><span class="d">04 · 2 min</span><span class="t"><b><a href="systems.html#handoff">Check the handoff discipline.</a></b> Every quality gate this site ships through, mapped to its analog in a customer deployment, with a worked example: a marketing team localizing one campaign across three languages. The operator starter kit for the pipeline is downloadable there.</span></div>
+diff --git a/picture-lock.html b/picture-lock.html
+index b82708e..f7a94e8 100644
+--- a/picture-lock.html
++++ b/picture-lock.html
+@@ -296,7 +296,7 @@
+           <div class="cs-stat"><div class="n">53s</div><div class="l">finished, captioned cut + Spanish dub</div></div>
+           <div class="cs-stat"><div class="n">7 of 7</div><div class="l">stages run live for this cut; every call logged + costed</div></div>
+         </div>
+-        <p class="mh-tldr">TL;DR: one script file in, a captioned and dubbed short out, for $8.26 of logged cost. Every stage gated and receipted. A customer team runs the next one from the <a href="#starter-kit">handoff kit</a>.</p>
++        <p class="mh-tldr">TL;DR: one script file in, a captioned short out, for $8.26 of logged cost, plus $0.42 for the Spanish dub on its own logged run. Every stage gated and receipted. A customer team runs the next one from the <a href="#starter-kit">handoff kit</a>.</p>
+       </div>
+       <div class="mh-reel">
+         <div class="cs-video">
+@@ -359,7 +359,7 @@
+       </div>
+       <div class="col after">
+         <div class="c-k">This run</div>
+-        <div class="c-b">One command from one operator: this cut, its narration and score, ten creatively directed and reviewed generated shots, a measured sound mix, and a Spanish dub, all for the $8.26 logged in the manifest. The "what does a finished minute cost" question has a receipt instead of a guess. Change one line and one beat re-renders: iterations in minutes, not meetings.</div>
++        <div class="c-b">One command from one operator: this cut, its narration and score, ten creatively directed and reviewed generated shots, and a measured sound mix, all for the $8.26 logged in the manifest, with the Spanish dub carrying its own $0.42 receipt from an earlier run. The "what does a finished minute cost" question has a receipt instead of a guess. Change one line and one beat re-renders: iterations in minutes, not meetings.</div>
+       </div>
+     </div>
+     <div class="cs-callout" style="margin-top:22px;">
+@@ -390,7 +390,9 @@
+ 
+       <p><strong>The manifest is the evidence.</strong> Every API call appends to <code>output/run-manifest.json</code> with model, params, cost, and latency. Cached artifacts carry their original cost forward, so the receipt reflects the whole cut, not just the last re-run.</p>
+ 
+-      <p>The committed manifest carries <strong>$8.26</strong> for the artifacts in this cut: $0.28 for the complete audio stack, $4.40 for the ten generated shots, $3.50 for creative direction, $0.08 for clip review. Summing the <a href="https://github.com/mitwilli-create/picture-lock/blob/main/output/run-manifest.json" rel="noopener">committed manifest</a> reproduces it line for line.</p>
++      <p>The committed manifest carries <strong>$8.26</strong> for the artifacts in this cut: $0.28 for the complete audio stack, $4.40 for the ten generated shots, $3.50 for creative direction, $0.08 for clip review. Summing the <a href="https://github.com/mitwilli-create/picture-lock/blob/main/output/run-manifest.json" rel="noopener">committed manifest</a> reproduces it: $0.78 of live spend on the day, plus $7.49 carried forward as the original cost of artifacts the cache served instead of re-billing.</p>
++
++      <p>The Spanish dub is not in that number. It rendered live on 8 July from the same script for <strong>$0.42</strong>, logged in the manifest committed at <a href="https://github.com/mitwilli-create/picture-lock/commit/2e51d27" rel="noopener">2e51d27</a>, and the final cut reused it rather than paying for it twice. The cut is $8.26. The dub is $0.42. They are two receipts, not one.</p>
+ 
+       <p>Getting to the shipped version cost more as it ran. The review board's extra re-rolls of one stubborn shot, a full score re-render, the foley experiments, and the Spanish dub renders brought the at-build ledger to about $14, spend that a post-cut re-render no longer carries. (One honesty note on the video itself: beat twelve renders the manifest as a thermal receipt, and it baked in the manifest state at cut time, $9.51 carried, before that final consolidation.)</p>
+ 
+diff --git a/projects.html b/projects.html
+index 5489fdd..13f0ea3 100644
+--- a/projects.html
++++ b/projects.html
+@@ -182,7 +182,7 @@
+         <div class="top"><span class="name">PictureLock</span><span class="chip-status">SHIPPED</span></div>
+         <h3>Script in, captioned video out, cost logged</h3>
+         <p class="body">Seven-stage video pipeline in Node and ffmpeg, built on the ElevenLabs stack. Feed it a plain-text script, out comes a finished, captioned short. Every API call logs to a costed run manifest. Each run is auditable down to the cent.</p>
+-        <div class="proof">7 stages · Node + ffmpeg · ElevenLabs stack · live demo: 53s creative-directed short + Spanish dub, $8.26 carried by the artifacts in the cut · public repo + committed run manifest</div>
++        <div class="proof">7 stages · Node + ffmpeg · ElevenLabs stack · live demo: 53s creative-directed short, $8.26 carried by the artifacts in the cut, plus a separately logged $0.42 Spanish dub · public repo + committed run manifest</div>
+         <div class="row">
+           <a class="go" href="picture-lock.html">Full breakdown</a>
+           <a class="go" href="https://github.com/mitwilli-create/picture-lock" rel="noopener">View repo</a>
+diff --git a/resumes-src/mitchell-williams-ai-enablement.md b/resumes-src/mitchell-williams-ai-enablement.md
+index d05f94d..c0d8934 100644
+--- a/resumes-src/mitchell-williams-ai-enablement.md
++++ b/resumes-src/mitchell-williams-ai-enablement.md
+@@ -16,7 +16,7 @@ linkedin.com/in/mitwilli | github.com/mitwilli-create | thestorytellermitch.com
+ ## Selected Builds
+ 
+ - **tax-verification-agent** · Citation-gated verification on Claude over a four-layer IRS knowledge base; every claim cites its source or surfaces as a placeholder. Caught a ~$19K multi-state error that filing software pre-filled and defended as correct. Public on GitHub.
+-- **PictureLock** · Seven-stage script-to-short creative-AI pipeline in Node and ffmpeg on the ElevenLabs stack; every API call logs to a committed run manifest. Live demo: a 53-second creative-directed short plus Spanish dub; the artifacts in the cut carry $8.26 of logged cost in the committed run manifest. Public on GitHub.
++- **PictureLock** · Seven-stage script-to-short creative-AI pipeline in Node and ffmpeg on the ElevenLabs stack; every API call logs to a committed run manifest. Live demo: a 53-second creative-directed short; the artifacts in the cut carry $8.26 of logged cost in the committed run manifest, with the Spanish dub receipted separately at $0.42. Public on GitHub.
+ - **career-ops** · Cost-governed multi-agent system, dozens of automations operated daily: multi-LLM council with dealbreaker adjudication, autonomous regression-guard and bug-resolver pipeline, Claude Code skills and MCP servers, live operations dashboard. CI-green, test-covered.
+ - **Executive digital twin (Google xGE)** · Gemini agent with a voice "Constitution" plus a banned-phrase verification checklist; drafted high-stakes VP communications, cutting review back-and-forth with the VP by about 70% (internal, self-measured). voice-os, its public personal descendant, is on GitHub.
+ 
+diff --git a/resumes-src/mitchell-williams-ai-solutions-architect.md b/resumes-src/mitchell-williams-ai-solutions-architect.md
+index 492a452..f4d03c0 100644
+--- a/resumes-src/mitchell-williams-ai-solutions-architect.md
++++ b/resumes-src/mitchell-williams-ai-solutions-architect.md
+@@ -25,7 +25,7 @@ Repos public at github.com/mitwilli-create.
+ 
+ **career-ops** · Multi-agent system running my job search daily: multi-LLM council-of-models with adjudication, custom Claude Code skills and MCP servers, 52 scheduled agents, 1,150+ scored role reports, live dashboard under a unified spend cap. CI-green; public on GitHub.
+ 
+-**PictureLock** · Seven-stage AI video pipeline in Node on the ElevenLabs stack; live demo receipt: a 53-second creative-directed short with a Spanish dub; the committed run manifest carries $8.26 for the artifacts in the cut, every call logged.
++**PictureLock** · Seven-stage AI video pipeline in Node on the ElevenLabs stack; live demo receipt: a 53-second creative-directed short; the committed run manifest carries $8.26 for the artifacts in the cut, the Spanish dub a separately logged $0.42, every call logged.
+ 
+ ## Fit for AI Solutions Architecture
+ 
+diff --git a/resumes-src/mitchell-williams-content-editorial.md b/resumes-src/mitchell-williams-content-editorial.md
+index c96fddf..a52f122 100644
+--- a/resumes-src/mitchell-williams-content-editorial.md
++++ b/resumes-src/mitchell-williams-content-editorial.md
+@@ -79,7 +79,7 @@ Owned the communications and content (documentation, self-help, onboarding, vide
+ 
+ **Portfolio** · [The writing room](../writing.html): the verbatim published AJ+ measles explainer script, 17 authored longform story pages, and redacted-verbatim Google work samples.
+ 
+-**PictureLock** · Seven-stage script-to-short video pipeline (Node + ffmpeg, ElevenLabs stack): narration, score, sound design, generated shots, multilingual dub. The 53-second live demo carries $8.26 of logged cost in the run manifest committed at github.com/mitwilli-create/picture-lock.
++**PictureLock** · Seven-stage script-to-short video pipeline (Node + ffmpeg, ElevenLabs stack): narration, score, sound design, generated shots, multilingual dub. The 53-second live demo carries $8.26 of logged cost in the run manifest committed at github.com/mitwilli-create/picture-lock; the Spanish dub carries a separately logged $0.42.
+ 
+ **content-ops** · A multi-agent engine that adapts one story to each of nine platforms' native formats through deterministic voice gates, with a person pressing send ([case study](../content-ops.html)).
+ 
+diff --git a/resumes-src/mitchell-williams-devrel-education.md b/resumes-src/mitchell-williams-devrel-education.md
+index 5fca86d..39c8bb4 100644
+--- a/resumes-src/mitchell-williams-devrel-education.md
++++ b/resumes-src/mitchell-williams-devrel-education.md
+@@ -15,7 +15,7 @@ linkedin.com/in/mitwilli | github.com/mitwilli-create | thestorytellermitch.com
+ 
+ ## Projects
+ 
+-**PictureLock** · Seven-stage AI video pipeline on the ElevenLabs stack: script in, produced and captioned short out. Live demo: a 53-second creative-directed short with a Spanish dub; $8.26 of logged cost carried by the artifacts in the cut, every API call logged to the committed run manifest. The repo README is the build walkthrough: quick-start in mock or live mode, a staged pipeline diagram, the full cost model, and a week-long adoption plan. Public at github.com/mitwilli-create/picture-lock.
++**PictureLock** · Seven-stage AI video pipeline on the ElevenLabs stack: script in, produced and captioned short out. Live demo: a 53-second creative-directed short; $8.26 of logged cost carried by the artifacts in the cut, plus a separately logged $0.42 for the Spanish dub, every API call logged to the committed run manifest. The repo README is the build walkthrough: quick-start in mock or live mode, a staged pipeline diagram, the full cost model, and a week-long adoption plan. Public at github.com/mitwilli-create/picture-lock.
+ 
+ **voice-os** · Six-axis voice scoring, dual-persona routing, and QA gates calibrated on a multi-million-word corpus; codified voice "Constitution" plus banned-phrase checker.
+ 
+diff --git a/resumes-src/mitchell-williams-forward-deployed.md b/resumes-src/mitchell-williams-forward-deployed.md
+index ec4e3a9..575563a 100644
+--- a/resumes-src/mitchell-williams-forward-deployed.md
++++ b/resumes-src/mitchell-williams-forward-deployed.md
+@@ -7,13 +7,13 @@ linkedin.com/in/mitwilli | github.com/mitwilli-create | thestorytellermitch.com
+ 
+ ## Summary
+ 
+-**The receipt first: PictureLock, in Node and ffmpeg on the ElevenLabs stack, produced a `53-second` creative-directed short with a Spanish dub. The artifacts in the cut carry `$8.26` of logged API cost, every call receipted in the committed public run manifest.** Forward Deployed Creative is the hands-on job I already do: embed with a team, map its production pipeline, ship the AI-native replacement for the slow part, and teach the team to run it. Twelve years of that loop, in live national newsrooms, then for Google's most senior engineers, now on the ElevenLabs creative stack.
++**The receipt first: PictureLock, in Node and ffmpeg on the ElevenLabs stack, produced a `53-second` creative-directed short. The artifacts in the cut carry `$8.26` of logged API cost, the Spanish dub a separately logged `$0.42`, every call receipted in the committed public run manifest.** Forward Deployed Creative is the hands-on job I already do: embed with a team, map its production pipeline, ship the AI-native replacement for the slow part, and teach the team to run it. Twelve years of that loop, in live national newsrooms, then for Google's most senior engineers, now on the ElevenLabs creative stack.
+ 
+ **Eight years at Google, the last two building production LLM agents for its most senior engineers**, after a decade in live national newsrooms where the workflow was the product. The Google role runs through August 2026. The public projects in this resume are a concurrent independent practice, and I'm available on customary notice.
+ 
+ ## Projects
+ 
+-**PictureLock** · Seven-stage AI video pipeline in Node and ffmpeg on the ElevenLabs stack: narration, score, sound design, generated shots, assembly, captions, dubbing (Spanish and Japanese shipped). The `53-second` live demo carries `$8.26` of logged cost in its committed run manifest. Ships with a four-file customer handoff kit (example script, config template, cost model, operator runbook) and a node-by-node mapping onto ElevenCreative Flows across its voice, music, image, and video nodes. Public and reproducible.
++**PictureLock** · Seven-stage AI video pipeline in Node and ffmpeg on the ElevenLabs stack: narration, score, sound design, generated shots, assembly, captions, dubbing (Spanish and Japanese shipped). The `53-second` live demo carries `$8.26` of logged cost in its committed run manifest, the Spanish dub a separately logged `$0.42`. Ships with a four-file customer handoff kit (example script, config template, cost model, operator runbook) and a node-by-node mapping onto ElevenCreative Flows across its voice, music, image, and video nodes. Public and reproducible.
+ 
+ **career-ops** · Multi-agent, cost-governed autonomous system extended from an open-source fork: multi-provider council-of-models with adjudication, regression-guard and bug-resolver pipeline, custom Claude Code skills and MCP servers, `52` scheduled agents, `1,150+` scored role reports, live operations dashboard. CI-green, test-covered, and public on GitHub.
+ 
+diff --git a/voice-os.html b/voice-os.html
+index 970d44d..f543709 100644
+--- a/voice-os.html
++++ b/voice-os.html
+@@ -216,6 +216,7 @@
+   <div class="wrap">
+     <div class="cs-h2">One run, fully visible</div>
+     <p class="cs-body">Everything below comes from a single logged run on 2026-07-12 (run id <code>capstone-voiceos-demo-20260712c</code>), shown in full rather than summarized. Context: a document for an external audience, high stakes, goal inform. The mined gate threshold for that context: <code>0.650</code>. The system retrieved three real exemplars from the corpus (two broadcast transcripts, one internal presentation), fused seven knowledge-base patterns and five mined patterns into guidance, and flagged two measured register drifts it should correct for. Then it drafted.</p>
++    <p class="cs-body">Both drafts below are reproduced exactly as the run logged them, unedited. That includes the production cost they quote, which was the at-build figure of the day and has since been consolidated: the film's committed manifest carries <a class="lnk-inline" href="picture-lock.html">$8.26</a>. Correcting the quote here would mean retouching a run trace to flatter a later number, which is the opposite of what this page is for.</p>
+     <div class="cs-compare">
+       <div class="col">
+         <div class="c-k">The draft in · scored 0.610, gate says revise</div>
+diff --git a/work.html b/work.html
+index 67fb79c..ff8416a 100644
+--- a/work.html
++++ b/work.html
+@@ -152,7 +152,7 @@
+       <div class="m-tag">Independent · AI-native · AI Pipeline Demo · 2026</div>
+       <div class="m-title">One script in, a produced short out</div>
+       <div class="m-stat">53s · built and directed the pipeline</div>
+-      <div class="m-why">The job in one artifact: voice, music, sound, and a Spanish dub on the ElevenLabs stack, $8.26 of logged cost carried by the artifacts in the cut, every call receipted in the committed manifest.</div>
++      <div class="m-why">The job in one artifact: voice, music, and sound on the ElevenLabs stack, $8.26 of logged cost carried by the artifacts in the cut, every call receipted in the committed manifest. The Spanish dub adds a separately logged $0.42.</div>
+     </div>
+   </a>
+   <a class="film third reveal" href="https://customer-bkgfhhvaijyxffgn.cloudflarestream.com/5a827c6fdf137c4523fa194224983a75/watch"

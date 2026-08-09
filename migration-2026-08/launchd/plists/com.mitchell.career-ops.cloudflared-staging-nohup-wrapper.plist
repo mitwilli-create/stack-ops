@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/Users/mitchellwilliams</string>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+	</dict>
+	<key>KeepAlive</key>
+	<false/>
+	<key>Label</key>
+	<string>com.mitchell.career-ops.cloudflared-staging-nohup-wrapper</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>/Users/mitchellwilliams/.local/career-ops-wrappers/cloudflared-staging-nohup.sh</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/Users/mitchellwilliams/Library/Logs/career-ops/cloudflared-staging-nohup-wrapper.err</string>
+	<key>StandardOutPath</key>
+	<string>/Users/mitchellwilliams/Library/Logs/career-ops/cloudflared-staging-nohup-wrapper.out</string>
+	<key>WorkingDirectory</key>
+	<string>/Users/mitchellwilliams</string>
+</dict>
+</plist>

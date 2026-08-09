@@ -1,0 +1,6 @@
+anthropic.claude-code-2.1.220-darwin-arm64
+anysphere.remote-containers-1.0.37
+anysphere.remote-ssh-1.1.13
+babyfox1306.pdf-forge-1.0.8-universal
+coderabbit.coderabbit-vscode-0.21.2-universal
+davidanson.vscode-markdownlint-0.62.0-universal

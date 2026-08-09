@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        com.mitchell.career-ops.background-sweep-daily
+
+        Cluster I (Background daily sweep, 2026-05-21). Layer 0 of the
+        dashboard hardening sprint's background autonomy. Fires daily at
+        03:00 PT against the apply-now queue (~20 rows per interview
+        decision). Delta-only per-signal checks; expected cost <$2/day.
+
+        Signals checked per row:
+          - liveness (free, Playwright via lib/http-liveness.mjs)
+          - jd_diff (free, sha-diff vs cached JD HTML)
+          - layoffs (free, Layoffs.fyi RSS + company-name grep)
+          [press headlines, funding, product releases — wired in follow-up
+           commit once the cost ceiling for paid summaries is calibrated]
+
+        Output: data/background-sweep-state.json (gitignored per the
+        sweep gitignore patch in the same commit). Drives drawer badges +
+        "What's new overnight" section in morning heartbeat.
+
+        Log paths OUTSIDE ~/Documents/ per the 2026-05-21 Sandbox finding
+        (xpcproxy can't write to plist StandardOut/ErrorPath under
+        ~/Documents/ on macOS Tahoe — see commit 3d426fe).
+
+        Bootstrap:
+          mkdir -p ~/Library/Logs/career-ops
+          launchctl bootstrap gui/$(id -u) \\
+            scripts/launchd/com.mitchell.career-ops.background-sweep-daily.plist
+    -->
+
+    <key>Label</key>
+    <string>com.mitchell.career-ops.background-sweep-daily</string>
+
+        <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-lc</string>
+        <string>export NVM_DIR=&quot;$HOME/.nvm&quot;; [ -s &quot;$NVM_DIR/nvm.sh&quot; ] &amp;&amp; . &quot;$NVM_DIR/nvm.sh&quot;; exec node &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/launchd-wrapper.mjs&apos; &apos;--label=com.mitchell.career-ops.background-sweep-daily&apos; &apos;--max-retries=0&apos; &apos;--retry-backoff-sec=60&apos; &apos;--&apos; &apos;node&apos; &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/background-sweep-daily.mjs&apos;</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mitchellwilliams/Documents/career-ops</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/background-sweep-daily.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/background-sweep-daily.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/mitchellwilliams</string>
+    </dict>
+</dict>
+</plist>

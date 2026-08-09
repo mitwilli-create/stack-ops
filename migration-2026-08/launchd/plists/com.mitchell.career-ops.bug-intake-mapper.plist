@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mitchell.career-ops.bug-intake-mapper</string>
+
+    <!--
+        Weekly bug-intake mapper. Sunday 23:00 PT — runs at end of week so
+        Monday's bug-resolver pass (Phase 2, Mon/Thu 02:00 PT) has a fresh
+        ledger to walk.
+
+        SHIPPED UNLOADED 2026-05-23. To load + disable (recommended for day-1
+        until Mitchell verifies a few weekly runs):
+            launchctl bootstrap gui/$(id -u) /Users/mitchellwilliams/Documents/career-ops/scripts/launchd/com.mitchell.career-ops.bug-intake-mapper.plist
+            launchctl disable gui/$(id -u)/com.mitchell.career-ops.bug-intake-mapper
+
+        To enable scheduled runs (after first manual verifications):
+            launchctl enable gui/$(id -u)/com.mitchell.career-ops.bug-intake-mapper
+
+        To uninstall entirely:
+            launchctl bootout gui/$(id -u)/com.mitchell.career-ops.bug-intake-mapper
+
+        Manual invocation anytime:
+            node scripts/agents/bug-intake-mapper.mjs              # full default-readers run
+            node scripts/agents/bug-intake-mapper.mjs --dry-run    # preview
+            node scripts/agents/bug-intake-mapper.mjs --surface transcript-flags   # opt-in reader
+
+        Spec source:
+            data/bug-resolver-plan.md § Phase 1 § 1.4
+
+        Pattern F compliance — log paths MUST live under ~/Library/Logs/
+        (macOS Tahoe TCC blocks launchd writes to ~/Documents/).
+        CalendarInterval one-shot, NOT a KeepAlive daemon — no nohup-wrapper
+        needed per the per-plist-type Tahoe rule.
+    -->
+        <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-lc</string>
+        <string>export NVM_DIR=&quot;$HOME/.nvm&quot;; [ -s &quot;$NVM_DIR/nvm.sh&quot; ] &amp;&amp; . &quot;$NVM_DIR/nvm.sh&quot;; exec node &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/launchd-wrapper.mjs&apos; &apos;--label=com.mitchell.career-ops.bug-intake-mapper&apos; &apos;--max-retries=0&apos; &apos;--retry-backoff-sec=60&apos; &apos;--&apos; &apos;node&apos; &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/agents/bug-intake-mapper.mjs&apos;</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mitchellwilliams/Documents/career-ops</string>
+
+    <!-- Sunday 23:00 PT. Weekday: 0=Sun, 1=Mon, ..., 6=Sat. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>0</integer>
+        <key>Hour</key>
+        <integer>23</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <!--
+        Log paths under ~/Library/Logs/career-ops/ per AGENTS.md Pattern F
+        (Tahoe sandbox blocks /Documents). DO NOT change these to anything
+        under ~/Documents/.
+    -->
+    <key>StandardOutPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/bug-intake-mapper.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/bug-intake-mapper.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/mitchellwilliams</string>
+    </dict>
+</dict>
+</plist>

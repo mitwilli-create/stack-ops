@@ -1,0 +1,12 @@
+{
+  "rootDir": "/Users/mitchellwilliams/Documents",
+  "stateDir": "/Users/mitchellwilliams/Library/Application Support/stack-ops/instance-shipping/state",
+  "receiptPath": "/Users/mitchellwilliams/Library/Logs/stack-ops/instance-shipping/receipts.jsonl",
+  "ownerMode": "solo",
+  "repositoryOwner": "mitwilli-create",
+  "leaseTtlMs": 900000,
+  "heartbeatTtlMs": 120000,
+  "deployTimeoutMs": 900000,
+  "apply": false,
+  "autoDraftPullRequest": true
+}

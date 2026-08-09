@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mitchell.career-ops.alignment-watcher</string>
+
+    <!--
+      P0.5 (2026-05-20) — Re-render the dashboard whenever data that feeds
+      the alignment bars changes. The bars per row are computed by
+      scoreAlignmentCached() in lib/alignment-scorer.mjs at dashboard build
+      time, and their inputs are:
+        - cv.md                (drives report regeneration on next eval)
+        - data/applications.md (prior-outcomes signal per company)
+        - reports/             (Block B match grid + competitive edges)
+
+      Watching all three means the bars stay live without the user clicking
+      a refresh button. ThrottleInterval debounces rapid saves so a 5-edit
+      burst only triggers one rebuild.
+
+      If Tahoe WatchPaths proves unreliable (intermittent fires on
+      directory changes), the chokidar fallback documented in
+      scripts/alignment-watcher-wrapper.sh can supersede.
+    -->
+    <!--
+      Calls node directly (NOT through a bash wrapper) because macOS Tahoe
+      TCC blocks launchd from exec'ing scripts under the user's home dir
+      unless Full Disk Access is granted. The existing heartbeat plist
+      pattern (node + .mjs path) works because the node binary lives
+      under .nvm which is already-granted; the launchd → bash → user-script
+      chain trips an "Operation not permitted" on every fire.
+    -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin/node</string>
+        <string>/Users/mitchellwilliams/Documents/career-ops/scripts/build-dashboard.mjs</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mitchellwilliams/Documents/career-ops</string>
+
+    <key>WatchPaths</key>
+    <array>
+        <string>/Users/mitchellwilliams/Documents/career-ops/cv.md</string>
+        <string>/Users/mitchellwilliams/Documents/career-ops/data/applications.md</string>
+        <string>/Users/mitchellwilliams/Documents/career-ops/reports</string>
+    </array>
+
+    <!-- 60s debounce — a 10-edit burst within 60s only triggers one rebuild. -->
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+
+    <!-- Event-driven, not long-running. -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- Don't fire on initial load — only on subsequent file changes. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Log path MUST live outside ~/Documents/ — macOS Tahoe TCC blocks
+         launchd from writing to log files under Documents (silent EX_CONFIG=78).
+         Fixed 2026-05-22 (Phase 6.5-CAD-1) — WatchPaths plists are affected
+         too, not just KeepAlive daemons. See AGENTS.md "Bug class:
+         launchd-tahoe-sandbox-logs". -->
+    <key>StandardOutPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/alignment-watcher.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/alignment-watcher.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/mitchellwilliams</string>
+    </dict>
+</dict>
+</plist>

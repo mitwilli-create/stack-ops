@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mitchell.career-ops.bug-resolver</string>
+
+    <!--
+        Bi-weekly bug-resolver pipeline. Mon/Thu 02:00 PT — matches the
+        Mon/Thu cadence locked via 2026-05-23 interview (data/bug-resolver-plan.md).
+        Walks data/bug-ledger.jsonl by severity priority, processes up to 5
+        bugs per run via the 7-phase pipeline, opens DRAFT PRs for resolved
+        bugs (never auto-merges).
+
+        SHIPPED UNLOADED 2026-05-23 (Phase 2 ship). Load + disable for day-1:
+            launchctl bootstrap gui/$(id -u) /Users/mitchellwilliams/Documents/career-ops/scripts/launchd/com.mitchell.career-ops.bug-resolver.plist
+            launchctl disable gui/$(id -u)/com.mitchell.career-ops.bug-resolver
+
+        Enable scheduled runs (after Test 1 manual validation):
+            launchctl enable gui/$(id -u)/com.mitchell.career-ops.bug-resolver
+
+        Kill switch (runtime, no unload required):
+            launchctl setenv BUG_RESOLVER_ENABLED false
+
+        Per-vendor kill switches:
+            launchctl setenv BUG_RESOLVER_VENDOR_DISABLED_GEMINI true
+            launchctl setenv BUG_RESOLVER_VENDOR_DISABLED_GROK4 true
+            launchctl setenv BUG_RESOLVER_VENDOR_DISABLED_GPT5 true
+
+        Uninstall entirely:
+            launchctl bootout gui/$(id -u)/com.mitchell.career-ops.bug-resolver
+
+        Manual invocation anytime:
+            node scripts/agents/bug-resolver.mjs                  # default run
+            node scripts/agents/bug-resolver.mjs --dry-run        # preview, $0
+            node scripts/agents/bug-resolver.mjs --bug bug-2026-05-23-003   # single
+            node scripts/agents/bug-resolver.mjs --max-bugs 3     # tighter cap
+
+        Spec source:
+            data/bug-resolver-plan.md § Phase 2 — Implementation Steps
+
+        Pattern F compliance — log paths under ~/Library/Logs/ (Tahoe sandbox
+        blocks /Documents). CalendarInterval one-shot — no nohup-wrapper needed.
+    -->
+        <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-lc</string>
+        <string>export NVM_DIR=&quot;$HOME/.nvm&quot;; [ -s &quot;$NVM_DIR/nvm.sh&quot; ] &amp;&amp; . &quot;$NVM_DIR/nvm.sh&quot;; exec node &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/launchd-wrapper.mjs&apos; &apos;--label=com.mitchell.career-ops.bug-resolver&apos; &apos;--max-retries=0&apos; &apos;--retry-backoff-sec=60&apos; &apos;--&apos; &apos;node&apos; &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/agents/bug-resolver.mjs&apos;</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mitchellwilliams/Documents/career-ops</string>
+
+    <!--
+        Mon/Thu 02:00 PT. CalendarInterval as an ARRAY = OR semantics
+        (fires on EITHER day, not both). Weekday: 1=Mon, 4=Thu.
+    -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Weekday</key>
+            <integer>1</integer>
+            <key>Hour</key>
+            <integer>2</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key>
+            <integer>4</integer>
+            <key>Hour</key>
+            <integer>2</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+    </array>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/bug-resolver.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/career-ops/bug-resolver.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/mitchellwilliams</string>
+    </dict>
+</dict>
+</plist>

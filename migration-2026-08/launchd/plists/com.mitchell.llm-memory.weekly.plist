@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        com.mitchell.llm-memory.weekly
+
+        Weekly maintenance for ~/Documents/llm-memory (the canonical LLM memory vault).
+        Prunes the agent-artifact paths Anthropic's cleanupPeriodDays does not reach, then
+        rebuilds the mem0 index one-way from the vault files.
+
+        Deliberately NO KeepAlive: this is a periodic one-shot, so it is not exposed to the
+        macOS Tahoe launchd KeepAlive regression (brain/bug-class-catalog.md, Pattern F).
+
+        Bootstrap:
+            launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mitchell.llm-memory.weekly.plist
+        Run once now:
+            launchctl kickstart -p gui/$(id -u)/com.mitchell.llm-memory.weekly
+        Remove:
+            launchctl bootout gui/$(id -u)/com.mitchell.llm-memory.weekly
+    -->
+    <key>Label</key>
+    <string>com.mitchell.llm-memory.weekly</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/mitchellwilliams/.local/llm-memory-wrappers/weekly.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mitchellwilliams</string>
+
+    <key>StartInterval</key>
+    <integer>604800</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/mitchellwilliams/.local/llm-memory-wrappers/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/mitchellwilliams/.local/llm-memory-wrappers/launchd.err.log</string>
+</dict>
+</plist>

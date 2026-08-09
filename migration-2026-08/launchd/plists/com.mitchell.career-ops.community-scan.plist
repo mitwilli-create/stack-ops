@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.mitchell.career-ops.community-scan</string>
+
+      <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-lc</string>
+        <string>export NVM_DIR=&quot;$HOME/.nvm&quot;; [ -s &quot;$NVM_DIR/nvm.sh&quot; ] &amp;&amp; . &quot;$NVM_DIR/nvm.sh&quot;; exec node &apos;/Users/mitchellwilliams/Documents/career-ops/scripts/launchd-wrapper.mjs&apos; &apos;--label=com.mitchell.career-ops.community-scan&apos; &apos;--max-retries=0&apos; &apos;--retry-backoff-sec=60&apos; &apos;--&apos; &apos;node&apos; &apos;/Users/mitchellwilliams/Documents/career-ops/community-scan.mjs&apos;</string>
+    </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>NVM_DIR</key>
+    <string>/Users/mitchellwilliams/.nvm</string>
+  </dict>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/mitchellwilliams/Documents/career-ops</string>
+
+  <!-- Run at 02:30 PT daily, right after the portal scan at 02:00 -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>10</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+
+    <!-- Log path MUST live outside ~/Documents/ - macOS Tahoe TCC blocks
+         launchd from writing to log files under Documents (silent EX_CONFIG=78).
+         Pattern F / feedback_tahoe_sandbox_calendar_interval.md. Fixed 2026-05-22. -->
+  <key>StandardOutPath</key>
+  <string>/Users/mitchellwilliams/Library/Logs/career-ops/community-scan.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/mitchellwilliams/Library/Logs/career-ops/community-scan.log</string>
+</dict>
+</plist>

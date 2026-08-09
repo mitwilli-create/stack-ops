@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        com.mitchell.stack-ops.memory-sweep
+
+        Reasoning-based maintenance of the memory vault, four times a day at
+        04:00, 10:00, 16:00 and 22:00 PT. Deliberately offset from
+        nightly-hygiene at 02:00 so the two never overlap.
+
+        Per project it asks a model for a TYPED PLAN and applies only the
+        operations its own validator accepts. The model never writes to the
+        vault. Operations: merge_facts, supersede, rewrite_index,
+        compact_sessions.
+
+        TCC, the thing that kept this unscheduled for a month: grants are
+        PER BINARY. /bin/zsh under launchd is DENIED read and list on
+        ~/Documents; node at its absolute path is GRANTED, and children it
+        spawns (git, claude) inherit the grant. Probed and verified
+        2026-08-06, which disproves the premise in
+        ~/.local/llm-memory-wrappers/weekly.sh that launchd "cannot read
+        ~/Documents at all".
+
+        node is therefore invoked DIRECTLY here, not through a shell. Do not
+        wrap this in /bin/zsh -c: that reintroduces the denial.
+
+        Billing: the runner refuses to start unless the subscription path
+        verifies (wrapper present and stripping ANTHROPIC_API_KEY, keychain
+        credential present). It never falls back to metered spend.
+
+        Cost: pilot measured $0.38 to $0.53 per project. Change-detection
+        skips projects whose memory has not moved since their last sweep, so
+        a typical run touches 1-3 projects. sweepCostCapUsd bounds the rest.
+
+        Log paths live OUTSIDE ~/Documents per the 2026-05-21 sandbox finding.
+
+        Bootstrap:
+          mkdir -p ~/Library/Logs/stack-ops/memory-sweep
+          cp scripts/launchd/com.mitchell.stack-ops.memory-sweep.plist ~/Library/LaunchAgents/
+          launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mitchell.stack-ops.memory-sweep.plist
+
+        Disable:
+          launchctl bootout gui/$(id -u)/com.mitchell.stack-ops.memory-sweep
+
+        Dry run by hand (plans and validates, applies nothing):
+          node ~/Documents/stack-ops/scripts/memory-sweep/memory-sweep.mjs --dry-run
+    -->
+
+    <key>Label</key>
+    <string>com.mitchell.stack-ops.memory-sweep</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin/node</string>
+        <string>/Users/mitchellwilliams/Documents/stack-ops/scripts/memory-sweep/memory-sweep.mjs</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/mitchellwilliams</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Hour</key><integer>4</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/stack-ops/memory-sweep/launchd.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/mitchellwilliams/Library/Logs/stack-ops/memory-sweep/launchd.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/mitchellwilliams/.claude/bin:/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/mitchellwilliams</string>
+    </dict>
+</dict>
+</plist>
