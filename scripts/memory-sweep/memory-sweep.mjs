@@ -39,6 +39,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, statSync, realpathSync } from 'node:fs';
 import { dirname, join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runSubscriptionPlan, verifyCodexChatGptSubscription } from './subscription-plan-fallback.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CONFIG = JSON.parse(readFileSync(join(HERE, 'config.json'), 'utf8'));
@@ -61,6 +62,8 @@ const RUN_LOG_DIR = join(CONFIG.logDir, RUN_ID);
 mkdirSync(RUN_LOG_DIR, { recursive: true });
 
 const SPEND = { total: 0 };
+const PLANNER_READY = { claude: false, codex: false };
+let PLANNER_PREFLIGHT_ATTEMPTS = [];
 
 // Paths that must never be read into a prompt or written by an operation.
 const PERSONAL = [
@@ -131,20 +134,69 @@ function normalizeOp(op) {
 
 // ------------------------------------------------------- billing preflight
 
+function codexPreflightFailureReason({ configured, binaryExists, account }) {
+  if (!configured || !binaryExists) return 'unavailable';
+  if (account?.ok) return null;
+  return account?.failureReason || 'account_unverified';
+}
+
 function preflightBilling() {
-  const problems = [];
-  if (!existsSync(CONFIG.claudeBin)) problems.push(`claudeBin missing: ${CONFIG.claudeBin}`);
+  PLANNER_PREFLIGHT_ATTEMPTS = [];
+  const claudeProblems = [];
+  if (!existsSync(CONFIG.claudeBin)) claudeProblems.push(`claudeBin missing: ${CONFIG.claudeBin}`);
   else {
     let body = '';
     try { body = readFileSync(CONFIG.claudeBin, 'utf8'); } catch { /* handled */ }
     if (!body.includes('env -u ANTHROPIC_API_KEY')) {
-      problems.push(`${CONFIG.claudeBin} does not strip ANTHROPIC_API_KEY; it would bill the metered API`);
+      claudeProblems.push(`${CONFIG.claudeBin} does not strip ANTHROPIC_API_KEY; it would bill the metered API`);
     }
   }
   if (run('/usr/bin/security', ['find-generic-password', '-s', 'Claude Code-credentials']).code !== 0) {
-    problems.push('no subscription credential in the keychain');
+    claudeProblems.push('no Claude subscription credential in the keychain');
   }
-  return problems;
+  PLANNER_READY.claude = claudeProblems.length === 0;
+  if (!PLANNER_READY.claude) {
+    PLANNER_PREFLIGHT_ATTEMPTS.push({
+      requestedSlot: 'frontier-planner',
+      resolvedModel: CONFIG.model,
+      provider: 'claude-cli',
+      accountType: 'subscription',
+      status: 'skipped',
+      failureReason: claudeProblems.some((problem) => problem.includes('missing')) ? 'unavailable' : 'credential',
+    });
+  }
+
+  const codexProblems = [];
+  const codexConfigured = Boolean(CONFIG.codexBin);
+  const codexBinaryExists = codexConfigured && existsSync(CONFIG.codexBin);
+  let codexAccount = null;
+  if (!codexBinaryExists) {
+    codexProblems.push(`codexBin missing: ${CONFIG.codexBin || '(not configured)'}`);
+  } else {
+    codexAccount = verifyCodexChatGptSubscription(
+      { bin: CONFIG.codexBin, model: CONFIG.codexModel },
+      { runDir: RUN_LOG_DIR },
+    );
+    if (!codexAccount.ok) codexProblems.push(`Codex ChatGPT subscription unavailable: ${codexAccount.failureReason}`);
+  }
+  PLANNER_READY.codex = codexProblems.length === 0;
+  if (!PLANNER_READY.codex) {
+    PLANNER_PREFLIGHT_ATTEMPTS.push({
+      requestedSlot: 'frontier-planner',
+      resolvedModel: CONFIG.codexModel || 'unconfigured',
+      provider: 'codex-cli',
+      accountType: 'unverified',
+      status: 'skipped',
+      failureReason: codexPreflightFailureReason({
+        configured: codexConfigured,
+        binaryExists: codexBinaryExists,
+        account: codexAccount,
+      }),
+    });
+  }
+
+  if (PLANNER_READY.claude || PLANNER_READY.codex) return [];
+  return [`no subscription planner is available; Claude: ${claudeProblems.join('; ') || 'unavailable'}; Codex: ${codexProblems.join('; ') || 'unavailable'}`];
 }
 
 // ------------------------------------------------------------ gathering
@@ -225,31 +277,47 @@ function buildPrompt(g) {
 }
 
 function askForPlan(g) {
-  const args = [
-    '-p', buildPrompt(g),
-    '--output-format', 'json',
-    '--permission-mode', 'acceptEdits',
-    '--model', CONFIG.model,
-    '--effort', CONFIG.effort,
-    '--disallowedTools', 'Write,Edit,NotebookEdit',   // belt and braces: it returns a plan, it does not edit
-  ];
-  const r = run(CONFIG.claudeBin, args, {
-    cwd: g.dir, timeoutMs: CONFIG.perProjectTimeoutMs, env: { ANTHROPIC_API_KEY: '' },
+  const result = runSubscriptionPlan({
+    prompt: buildPrompt(g),
+    workDir: g.dir,
+    runDir: RUN_LOG_DIR,
+    timeoutMs: CONFIG.perProjectTimeoutMs,
+    scanner: { bin: process.execPath, script: SECRET_SCAN },
+    preflightAttempts: PLANNER_PREFLIGHT_ATTEMPTS,
+    claude: PLANNER_READY.claude
+      ? { bin: CONFIG.claudeBin, model: CONFIG.model, effort: CONFIG.effort }
+      : null,
+    codex: PLANNER_READY.codex
+      ? { bin: CONFIG.codexBin, model: CONFIG.codexModel }
+      : null,
   });
-  writeFileSync(join(RUN_LOG_DIR, `${g.project}.plan.json`), r.stdout || r.stderr || '');
-  if (r.timedOut) return { ok: false, error: `timed out after ${CONFIG.perProjectTimeoutMs}ms` };
-  if (r.code !== 0) return { ok: false, error: `claude exited ${r.code}: ${r.stderr.slice(0, 300)}` };
-
-  try {
-    const env = JSON.parse(r.stdout);
-    SPEND.total += Number(env.total_cost_usd) || 0;
-    const text = typeof env.result === 'string' ? env.result : r.stdout;
-    const m = text.match(/\{[\s\S]*\}/);
-    if (!m) return { ok: false, error: 'no JSON plan in response' };
-    return { ok: true, plan: JSON.parse(m[0]), costUsd: Number(env.total_cost_usd) || 0 };
-  } catch (e) {
-    return { ok: false, error: `unparseable plan: ${e.message}` };
+  writeFileSync(join(RUN_LOG_DIR, `${g.project}.plan.json`), JSON.stringify({
+    requestedSlot: 'frontier-planner',
+    resolvedModel: result.resolvedModel || null,
+    provider: result.provider || null,
+    accountType: result.provider ? 'subscription' : null,
+    attempts: result.attempts,
+    operationCount: result.ok && Array.isArray(result.plan?.operations) ? result.plan.operations.length : null,
+  }, null, 2));
+  if (!result.ok) {
+    const summary = result.attempts
+      .map((entry) => `${entry.provider}/${entry.resolvedModel}:${entry.failureReason}`)
+      .join(', ');
+    return {
+      ok: false,
+      error: `subscription planners failed (${summary || result.failureReason})`,
+      providerAttempts: result.attempts,
+    };
   }
+  SPEND.total += result.costUsd || 0;
+  return {
+    ok: true,
+    plan: result.plan,
+    costUsd: result.costUsd || 0,
+    provider: result.provider,
+    resolvedModel: result.resolvedModel,
+    providerAttempts: result.attempts,
+  };
 }
 
 // ------------------------------------------------------- validate + apply
@@ -294,6 +362,10 @@ function indexBudgetVerdict(size, wasBytes, target, cap) {
 function validateOp(g, op) {
   const bad = (why) => ({ ok: false, why });
   if (!op || typeof op !== 'object') return bad('not an object');
+  if (op.why !== undefined) {
+    if (typeof op.why !== 'string' || /[\r\n]/.test(op.why)) return bad('why must be a single line');
+    if (op.why.length > 240) return bad('why must be at most 240 characters');
+  }
 
   const bodies = [op.new_body, op.digest_body].filter((b) => typeof b === 'string');
   for (const b of bodies) {
@@ -487,6 +559,9 @@ function sweepProject(project) {
 
   const res = askForPlan(g);
   out.costUsd = res.costUsd || 0;
+  out.provider = res.provider || null;
+  out.resolvedModel = res.resolvedModel || null;
+  out.providerAttempts = res.providerAttempts || [];
   if (!res.ok) { out.status = 'plan-failed'; out.error = res.error; log(`  FAILED: ${res.error}`); return out; }
   if (out.costUsd) log(`  cost $${out.costUsd.toFixed(2)} (run total $${SPEND.total.toFixed(2)})`);
 
@@ -685,4 +760,4 @@ function invokedDirectly() {
 if (invokedDirectly()) main();
 
 // Exported for guards.test-style verification. Not part of the run path.
-export { validateOp, indexBudgetVerdict };
+export { validateOp, indexBudgetVerdict, codexPreflightFailureReason };

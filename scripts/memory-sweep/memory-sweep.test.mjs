@@ -17,7 +17,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const { validateOp, indexBudgetVerdict } = await import('./memory-sweep.mjs');
+const { validateOp, indexBudgetVerdict, codexPreflightFailureReason } = await import('./memory-sweep.mjs');
 
 /** Build a throwaway project dir with `sizes` bytes per source file. */
 function fixture(sizes) {
@@ -88,6 +88,26 @@ test('importing the module does not start a sweep', () => {
   // this file would never reach here cleanly. Asserting the export exists is the
   // cheap standing proof that import stayed side-effect free.
   assert.equal(typeof validateOp, 'function');
+});
+
+test('rejects multiline or overlong operation reasons before any body processing', () => {
+  const multiline = validateOp({}, { why: 'first line\nsecond line' });
+  assert.equal(multiline.ok, false);
+  assert.match(multiline.why, /single line/);
+
+  const overlong = validateOp({}, { why: 'x'.repeat(241) });
+  assert.equal(overlong.ok, false);
+  assert.match(overlong.why, /240/);
+});
+
+test('Codex preflight preserves the exact bounded subscription failure reason', () => {
+  assert.equal(codexPreflightFailureReason({ configured: false, binaryExists: false }), 'unavailable');
+  assert.equal(codexPreflightFailureReason({ configured: true, binaryExists: false }), 'unavailable');
+  assert.equal(codexPreflightFailureReason({ configured: true, binaryExists: true, account: { ok: false, failureReason: 'timeout' } }), 'timeout');
+  assert.equal(codexPreflightFailureReason({ configured: true, binaryExists: true, account: { ok: false, failureReason: 'authorization' } }), 'authorization');
+  assert.equal(codexPreflightFailureReason({ configured: true, binaryExists: true, account: { ok: false, failureReason: 'credential' } }), 'credential');
+  assert.equal(codexPreflightFailureReason({ configured: true, binaryExists: true, account: { ok: false } }), 'account_unverified');
+  assert.equal(codexPreflightFailureReason({ configured: true, binaryExists: true, account: { ok: true } }), null);
 });
 
 // ---------------------------------------------------------- rewrite_index budget
