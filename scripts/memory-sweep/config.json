@@ -4,6 +4,8 @@
   "claudeBin": "/Users/mitchellwilliams/.claude/bin/claude",
   "model": "sonnet",
   "effort": "medium",
+  "codexBin": "/Users/mitchellwilliams/.nvm/versions/node/v24.14.0/bin/codex",
+  "codexModel": "gpt-5.6-sol",
   "perProjectTimeoutMs": 600000,
   "globalDeadlineMs": 5400000,
   "sweepCostCapUsd": 4,
@@ -32,7 +34,8 @@
     "cadence": "Every 6h via launchd. node is the entrypoint because TCC grants are per-binary: /bin/zsh is denied ~/Documents under launchd, node at its absolute path is granted. Verified by probe 2026-08-06.",
     "forceAfterHours": "A project unchanged since its last sweep is skipped and costs nothing. This forces a pass anyway after 168h (7 days) so a stale index cannot hide behind unchanged forever.",
     "mergeCompressionFloor": "A merged body must keep at least 40% of the combined bytes of its sources. The first live run cut 8733B to 1287B (15%) while claiming no facts were lost, having dropped Composer from the flat-rate routing rule. Deduplication removes repetition, not content.",
-    "strayDrain": "Scheduled drain of unwrapped transcripts. /wrap only mines 8 per run because it reads each into the live session's context, so the backlog outran it and sessions began declining the work. maxPerRun bounds one run; the job is restartable and the ledger prevents double-mining. Summarisation routes to the cheap open-weight tier at roughly $0.004 per transcript; transcripts the privacy gate refuses are re-run with --engine claude so they bill the subscription and never leave the machine."
+    "strayDrain": "Scheduled drain of unwrapped transcripts. /wrap only mines 8 per run because it reads each into the live session's context, so the backlog outran it and sessions began declining the work. maxPerRun bounds one run; the job is restartable and the ledger prevents double-mining. Summarisation routes to the cheap open-weight tier at roughly $0.004 per transcript; transcripts the privacy gate refuses are re-run with --engine claude so they bill the subscription and never leave the machine.",
+    "plannerFailover": "Typed memory plans use the Claude subscription first, then the ChatGPT subscription through Codex when quota, plan-limit, credential, timeout, circuit, unavailable-provider, or malformed-response failures occur. Policy, privacy, input, and authorization failures hard-stop. Both children receive no metered API keys; Codex is ephemeral and read-only."
   },
   "forceAfterHours": 168,
   "mergeCompressionFloor": 0.4,
