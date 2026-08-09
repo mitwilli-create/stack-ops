@@ -81,13 +81,11 @@ detectors. Detection is triage plus a provenance trail plus a periodic human
 benchmark, never a verdict on its own. A voice linter enforces the two hardest
 house-style rules cheaply and always-on.
 
-**Code-QA**: a tiered review stack: an always-on low-noise diff reviewer on every
-repo; a full-codebase semantic reviewer added only on complex or high-blast-radius
-repos; a merge-gate reviewer added only on production-critical repos, and only for
-high-stakes changes. Hard anti-pattern, encoded in code: never run all three on a
-trivial change, and never let "the bot found nothing" be the only required check. A
-companion classifier decides which reviewers a change needs from diff size, files
-touched, and whether it touches an auth, payment, security, or migration path.
+**Code QA**: repository tests, lint, type checks, static and security checks,
+`git diff --check`, and local review skills are the default. Qodo and Greptile are
+blocked. CodeRabbit is a manual fallback only through 2026-09-08, with one named
+flat-rate review, automatic review disabled, and explicit approval for that run.
+No hosted reviewer is a merge gate or a substitute for local evidence.
 
 **Infrastructure and MCP**: a tight foundational set of protocol-connected tools
 (source control, browser automation, live library docs, semantic code search,
@@ -129,7 +127,7 @@ pattern against the code-QA tiering above.
 references with fallback chains, an open-weight provider, media dispatch targets, and
 a physical separation between the research-debate lineup and the task-routing policy
 table (previously one entangled code path). It went through the same pull-request
-discipline as everything else, with a bot-review loop to zero findings before merge.
+discipline as everything else, with local QA and local review evidence before the human merge decision.
 Specifying the change first and shipping it slowly is part of the methodology: a
 routing engine is exactly the shared infrastructure where an unreviewed change has the
 highest blast radius, so it gets the most-reviewed path to production, not the fastest.

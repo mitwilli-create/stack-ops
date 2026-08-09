@@ -1,8 +1,8 @@
 # .coderabbit.yaml, stack-wide baseline, scaffolded 2026-07-19 from career-ops's
-# churn-tuned config (decision G: CodeRabbit is always-on on every repo).
-# Greptile (complex repos) + Qodo merge-gate (production-critical repos) are
-# GitHub-App / dashboard + branch-protection configured, NOT repo files
-# see stack-ops/docs/qa-tiering.md for the per-repo tier assignment.
+# free-first policy: automatic reviews and replies are disabled; hosted review is not a required gate.
+# Qodo and Greptile are blocked; CodeRabbit is a manual fallback only and never automatic.
+# GitHub App and dashboard state are external; this file disables repository automation.
+# See stack-ops/docs/qa-tiering.md for the live review contract.
 #
 # "chill" profile keeps real-defect review at full strength while dropping the
 # nitpick tail; correctness / security / data-integrity are pinned to always-raise
@@ -15,14 +15,14 @@ reviews:
   request_changes_workflow: false
   high_level_summary: true
   poem: false
-  # decorative features off, per-round variance, never a defect
+  # decorative features off, provider-output variance, never a defect
   sequence_diagrams: false
   suggested_labels: false
   suggested_reviewers: false
   related_issues: false
   related_prs: false
   auto_review:
-    enabled: true
+    enabled: false
     drafts: false
   path_filters:
     # machine-generated / build outputs, review adds nothing
@@ -58,4 +58,4 @@ knowledge_base:
     scope: local
 
 chat:
-  auto_reply: true
+  auto_reply: false

@@ -246,15 +246,87 @@ test('cursorBaseUrl: refuses localhost / private hosts (Cursor SSRF-blocks them)
 
 // ── PR reviewer triage ───────────────────────────────────────────────────────
 
-test('triagePr: small low-risk diff → CodeRabbit only', () => {
-  const r = triagePr({ additions: 20, deletions: 5, filesChanged: 2, repoTier: REPO_TIER.STANDARD });
-  assert.ok(r.reviewers.includes(REVIEWER.CODERABBIT));
-  assert.ok(r.reviewers.length <= 2, 'never stack three bots on one PR');
+test('triagePr: default uses local gates and excludes paid reviewers', () => {
+  const r = triagePr({ linesChanged: 25, filesChanged: 2, repoTier: REPO_TIER.STANDARD });
+  assert.deepEqual(r.reviewers, [REVIEWER.LOCAL_GATES, REVIEWER.LOCAL_REVIEW_SKILL]);
+  assert.ok(!r.reviewers.includes(REVIEWER.CODERABBIT));
+  assert.ok(!r.reviewers.includes(REVIEWER.GREPTILE));
+  assert.ok(!r.reviewers.includes(REVIEWER.QODO));
 });
 
-test('triagePr: never assigns three reviewers to one PR', () => {
-  const r = triagePr({ additions: 5000, deletions: 3000, filesChanged: 90, repoTier: REPO_TIER.PRODUCTION_CRITICAL, riskLabels: ['security', 'migration'] });
-  assert.ok(r.reviewers.length <= 2, `got ${r.reviewers.length} reviewers`);
+test('triagePr: paid reviewers require explicit opt-in and stay bounded', () => {
+  const r = triagePr({ linesChanged: 8000, filesChanged: 90, repoTier: REPO_TIER.PRODUCTION, riskLabels: ['security', 'migration'] }, {
+    paidReviewers: [REVIEWER.CODERABBIT, REVIEWER.GREPTILE, REVIEWER.QODO],
+  });
+  assert.deepEqual(r.reviewers, [REVIEWER.LOCAL_GATES, REVIEWER.LOCAL_REVIEW_SKILL]);
+  assert.equal(r.mergeGate, null);
+});
+
+test('triagePr: explicit paid opt-in allows one named reviewer only', () => {
+  const r = triagePr({ linesChanged: 8000, filesChanged: 90, repoTier: REPO_TIER.PRODUCTION, riskLabels: ['security', 'migration'] }, {
+    allowPaidReviewers: true,
+    paidReviewers: [REVIEWER.CODERABBIT, REVIEWER.GREPTILE, REVIEWER.QODO],
+    hostedApproval: {
+      provider: REVIEWER.CODERABBIT,
+      billingMode: 'flat-rate',
+      automatic: false,
+      approvedUntil: '2026-09-08',
+      maxReviews: 1,
+    },
+    currentDate: '2026-08-09',
+  });
+  const paid = r.reviewers.filter(name => [REVIEWER.CODERABBIT, REVIEWER.GREPTILE, REVIEWER.QODO].includes(name));
+  assert.deepEqual(paid, [REVIEWER.CODERABBIT]);
+  assert.equal(r.mergeGate, null);
+});
+
+test('triagePr: malformed, expired, overlong, or multi-review approvals stay local', () => {
+  for (const hostedApproval of [
+    { provider: REVIEWER.CODERABBIT, billingMode: 'flat-rate', automatic: false, approvedUntil: 'not-a-date', maxReviews: 1 },
+    { provider: REVIEWER.CODERABBIT, billingMode: 'flat-rate', automatic: false, approvedUntil: '2026-08-99', maxReviews: 1 },
+    { provider: REVIEWER.CODERABBIT, billingMode: 'flat-rate', automatic: false, approvedUntil: '2026-08-08', maxReviews: 1 },
+    { provider: REVIEWER.CODERABBIT, billingMode: 'flat-rate', automatic: false, approvedUntil: '2026-09-09', maxReviews: 1 },
+    { provider: REVIEWER.CODERABBIT, billingMode: 'flat-rate', automatic: false, approvedUntil: '2026-09-08', maxReviews: 2 },
+  ]) {
+    const r = triagePr({}, {
+      allowPaidReviewers: true,
+      paidReviewers: [REVIEWER.CODERABBIT],
+      hostedApproval,
+      currentDate: '2026-08-09',
+    });
+    assert.deepEqual(r.reviewers, [REVIEWER.LOCAL_GATES, REVIEWER.LOCAL_REVIEW_SKILL]);
+  }
+});
+
+test('triagePr: hosted review without a bounded flat-rate approval stays local', () => {
+  const r = triagePr({ linesChanged: 8000, filesChanged: 90, repoTier: REPO_TIER.PRODUCTION }, {
+    allowPaidReviewers: true,
+    paidReviewers: [REVIEWER.CODERABBIT],
+    hostedApproval: {
+      provider: REVIEWER.CODERABBIT,
+      billingMode: 'usage-based',
+      automatic: false,
+      approvedUntil: '2026-09-08',
+    },
+  });
+  assert.deepEqual(r.reviewers, [REVIEWER.LOCAL_GATES, REVIEWER.LOCAL_REVIEW_SKILL]);
+  assert.equal(r.mergeGate, null);
+});
+
+test('triagePr: Qodo and Greptile remain blocked even when requested', () => {
+  const r = triagePr({ linesChanged: 8000, filesChanged: 90, repoTier: REPO_TIER.PRODUCTION, riskLabels: ['security'] }, {
+    allowPaidReviewers: true,
+    paidReviewers: [REVIEWER.QODO, REVIEWER.GREPTILE],
+    hostedApproval: {
+      provider: REVIEWER.QODO,
+      billingMode: 'flat-rate',
+      automatic: false,
+      approvedUntil: '2026-09-08',
+    },
+  });
+  assert.ok(!r.reviewers.includes(REVIEWER.QODO));
+  assert.ok(!r.reviewers.includes(REVIEWER.GREPTILE));
+  assert.equal(r.mergeGate, null);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

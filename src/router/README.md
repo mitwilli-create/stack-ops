@@ -10,7 +10,7 @@ sensitive content off third-party providers.
 |---|---|
 | `privacy-gate.mjs` | **Content-level privacy gate.** Per-request signal check → route `anthropic-direct` (trusted) or `auto` (cheap external). Deny-by-default; pure/sync/no-network. |
 | `openrouter-auto.mjs` | Endpoint config + `resolveTarget()` mapping a gate decision to a concrete forwarding target (OpenRouter Auto vs Anthropic-direct). Encodes the Cursor topology + SSRF note. |
-| `pr-reviewer-triage.mjs` | **PR-reviewer triage** on the same substrate: routes a PR to CodeRabbit (always-on) ± Greptile ± Qodo by diff size, files, risk labels, repo tier. |
+| `pr-reviewer-triage.mjs` | **PR-reviewer triage** on the same substrate: routes every PR to local gates and a local review skill; CodeRabbit is a bounded manual fallback, while Qodo and Greptile are blocked. |
 | `cli.mjs` | Inspect the decision for a request (`npm run gate`). |
 | `router.test.mjs` | Tests (`npm test`). |
 | `../../private/router-config.mjs` | **Gitignored.** Mitchell's specific private paths / employer markers / PII. Patterns only, never secret values. The gate works without it (generic defaults are safe). |
