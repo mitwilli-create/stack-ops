@@ -603,6 +603,102 @@ test('startup recovers a first-run claim intent before a disposition ledger exis
   assert.equal(JSON.parse(readFileSync(dispositions, 'utf8')).detailCode, 'recovered-dead-owner-before-placement');
 });
 
+test('startup retires a zero-placement provider failure after dead-claim recovery without replacing its progress proof', () => {
+  const root = mkdtempSync(join(tmpdir(), 'stack-stray-provider-failure-retirement-'));
+  const logDir = join(root, 'runs');
+  const runDirectory = join(logDir, 'run-provider-failure');
+  const sourcePath = join(root, 'provider-failure.jsonl');
+  const dispositions = join(root, 'dispositions.jsonl');
+  const ledgerPath = join(root, 'ledger.txt');
+  mkdirSync(runDirectory, { recursive: true, mode: 0o700 });
+  writeFileSync(sourcePath, '{"type":"user"}\n', { mode: 0o600 });
+  writeFileSync(join(runDirectory, 'sources.txt'), `${sourcePath}\n`, { mode: 0o600 });
+  writeFileSync(ledgerPath, '', { mode: 0o600 });
+  const providerFailed = {
+    transcriptId: 'provider-failure', sourcePath, status: 'provider_failed',
+    observedAt: '2026-08-10T07:34:46.000Z', runId: RUN_ID,
+    detailCode: 'provider-chain-exhausted', project: 'documents', chars: 1870000, chunks: 39,
+    sourceSha256: 'a'.repeat(64), requestedSlot: 'structured_extraction',
+    provider: 'openai', resolvedModel: 'subscription-default-unreported',
+    accountType: 'subscription', failureReason: 'tool_isolation_unavailable',
+    providerAttempts: [
+      {
+        engine: 'claude', requestedSlot: 'structured_extraction', provider: 'anthropic',
+        resolvedModel: 'subscription-default-unreported', accountType: 'subscription',
+        outcome: 'failed', failureReason: 'nonzero-exit',
+      },
+      {
+        engine: 'codex', requestedSlot: 'structured_extraction', provider: 'openai',
+        resolvedModel: 'subscription-default-unreported', accountType: 'subscription',
+        outcome: 'preflight-failed', failureReason: 'tool_isolation_unavailable',
+      },
+    ],
+  };
+  writeFileSync(join(runDirectory, 'progress.jsonl'), `${JSON.stringify(providerFailed)}\n`, { mode: 0o600 });
+  writeFileSync(dispositions, `${JSON.stringify(providerFailed)}\n`, { mode: 0o600 });
+  const claimIntent = {
+    event: 'claim_intent', transcriptId: providerFailed.transcriptId, sourcePath,
+    observedAt: providerFailed.observedAt, runId: RUN_ID, ownerPid: 999999,
+  };
+  writeFileSync(join(runDirectory, 'placement-journal.jsonl'), [
+    JSON.stringify(claimIntent),
+    JSON.stringify({ ...claimIntent, event: 'claim_acquired' }),
+    '',
+  ].join('\n'), { mode: 0o600 });
+  writeFileSync(join(runDirectory, 'incomplete-progress.json'), `${JSON.stringify({
+    schemaVersion: 1,
+    observedAt: '2026-08-10T07:34:49.000Z',
+    childFailure: 'exit_1',
+    missing: [{
+      transcriptId: providerFailed.transcriptId,
+      sourcePath,
+      status: 'missing_progress',
+      detailCode: 'evidence_conflict',
+    }],
+    issues: [{ kind: 'supplemental_progress_conflict', transcriptId: providerFailed.transcriptId }],
+    journalActive: 0,
+    journalMissing: 0,
+    journalUnproven: 0,
+  })}\n`, { mode: 0o600 });
+  const released = {
+    transcriptId: providerFailed.transcriptId, sourcePath, status: 'claim_error',
+    observedAt: providerFailed.observedAt, runId: RUN_ID,
+    detailCode: 'recovered-dead-owner-before-placement',
+  };
+  const drainer = join(root, 'drainer.mjs');
+  writeFileSync(drainer, `
+    import { appendFileSync } from 'node:fs';
+    const args = process.argv.slice(2);
+    const get = (flag) => args[args.indexOf(flag) + 1];
+    appendFileSync(get('--dispositions'), JSON.stringify(${JSON.stringify(released)}) + '\\n');
+    process.stdout.write(JSON.stringify({ recovered: 0, released: 1, active: 0, missing: 0, unproven: 0, status: 'reconciled' }) + '\\n');
+  `, { mode: 0o700 });
+  const lib = join(root, 'wrap-lib.sh');
+  writeFileSync(lib, `
+    wrap_lock() { d="${root}/provider-failure.lock"; mkdir "$d" || return 1; printf '%s' "$d|$$|token"; }
+    wrap_unlock() { d="\${1%%|*}"; rmdir "$d"; }
+  `, { mode: 0o600 });
+  const input = {
+    logDir, vault: join(root, 'vault'), lib, drainer, dispositions,
+    ledgerPath, timeoutMs: 10_000,
+  };
+
+  const first = resumePendingFinalizations(input);
+  assert.deepEqual(first, []);
+  assert.equal(JSON.parse(readFileSync(join(runDirectory, 'transaction-resolution.json'), 'utf8')).status, 'no_placements');
+  assert.equal(JSON.parse(readFileSync(join(runDirectory, 'incomplete-progress-retirement.json'), 'utf8')).status, 'transaction_retired');
+  assert.equal(readFileSync(join(runDirectory, 'progress.jsonl'), 'utf8'), `${JSON.stringify(providerFailed)}\n`);
+  const dispositionAfterFirst = readFileSync(dispositions, 'utf8');
+  const resolutionAfterFirst = readFileSync(join(runDirectory, 'transaction-resolution.json'), 'utf8');
+  const retirementAfterFirst = readFileSync(join(runDirectory, 'incomplete-progress-retirement.json'), 'utf8');
+
+  const second = resumePendingFinalizations(input);
+  assert.deepEqual(second, []);
+  assert.equal(readFileSync(dispositions, 'utf8'), dispositionAfterFirst);
+  assert.equal(readFileSync(join(runDirectory, 'transaction-resolution.json'), 'utf8'), resolutionAfterFirst);
+  assert.equal(readFileSync(join(runDirectory, 'incomplete-progress-retirement.json'), 'utf8'), retirementAfterFirst);
+});
+
 test('startup retries a quarantined rollback and records a durable resolution', () => {
   const root = mkdtempSync(join(tmpdir(), 'stack-stray-resume-rollback-'));
   const vault = join(root, 'vault');
