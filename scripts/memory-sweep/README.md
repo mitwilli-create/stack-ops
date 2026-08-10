@@ -74,6 +74,71 @@ node ~/Documents/stack-ops/scripts/memory-sweep/memory-sweep.mjs --layers=indice
 launchctl bootout gui/$(id -u)/com.mitchell.stack-ops.memory-sweep
 ```
 
+## Scheduled transcript drain
+
+`stray-drain.mjs` discovers quiet, unclaimed top-level Claude JavaScript Object
+Notation Lines (JSONL) transcripts from
+metadata only. It excludes the current session, files modified inside the configured
+45-minute quiet interval, symlinks, nested subagent records, and project roots without
+a direct memory symlink into the canonical vault. The Claude-config drainer then
+claims each identifier before reading content, scans the complete input before a
+provider call, writes through the append-only hardlink placement primitive, and emits
+one metadata-only disposition.
+
+The cheap route always runs with `CHEAP_NO_ESCALATE=1`. Exhausted cheap models cannot
+silently invoke a metered frontier model. Privacy, policy, input, and authorization
+failures stop. Eligible operational failures may advance only through the approved
+subscription route recorded by the drainer.
+
+The scheduler validates every progress row, scans each complete record again, and
+stages only private untracked paths returned by that run. The vault commit holds the
+shared wrap lock and uses `git commit --only` with the exact path list. A failed commit
+quarantines the exact records and releases their claims before the same lock is
+released. A successful commit becomes complete only after the drainer records and the
+scheduler verifies one exact `captured` disposition per committed record.
+
+Before child processing, the scheduler creates a private transaction owner receipt and
+an empty placement journal. The drainer records claim intent before claiming, exact
+claim-acquisition proof after claiming, placement intent before placing, and exact
+placement proof after placing. Startup recovery runs under the vault lock and uses that
+journal to release only a proven dead acquired claim, recover an exact intent-only or
+placed-only record, finish captured disposition writes, or resume a recoverable
+rollback. A claim intent without acquisition proof remains an explicit `unproven`
+blocker and is never released automatically. Conflicting progress, intent, placement,
+path, or hash proof is never eligible for materialization or commit. If one selected
+transcript remains missing or retryable, every complete typed row is still reconciled
+and any conflict-free placed records are committed safely, but the run remains
+explicitly incomplete. A durable retirement marker links that incomplete receipt to its
+verified rollback or finalization before the startup and pending-transaction censuses
+consider the transaction resolved.
+
+```sh
+# Install or refresh the macOS Tahoe nohup-wrapper LaunchAgent.
+~/Documents/stack-ops/scripts/install-stray-drain-launchd.zsh
+
+# Metadata census only. No claim, model, vault, or Git write.
+node ~/Documents/stack-ops/scripts/memory-sweep/stray-drain.mjs --dry-run
+
+# Bounded production run using the configured maximum.
+node ~/Documents/stack-ops/scripts/memory-sweep/stray-drain.mjs
+
+# Exact eligible set. The file is mode 0600 with one lowercase universally unique
+# identifier (UUID) per line and must use an absolute path.
+node ~/Documents/stack-ops/scripts/memory-sweep/stray-drain.mjs --ids-file /absolute/private/requested-ids.txt
+```
+
+The scheduler runs at 01:30 and 13:30 Pacific time. The installer renders a private
+runtime wrapper under `~/.local/stack-ops`, validates the property list, and reloads
+the LaunchAgent. The wrapper detaches the bounded coordinator through `nohup`, which
+prevents long launchd jobs from flapping on macOS Tahoe. The coordinator receives a
+clean environment containing only basic process variables and the cheap-lane
+credential; unrelated credentials from the graphical user interface (GUI) domain
+are not inherited.
+
+Raw transcripts are never deleted. Retryable outcomes retain the raw source and release
+their claim. Terminal no-record outcomes require a durable metadata-only disposition.
+The current run log is under `~/Library/Logs/stack-ops/stray-drain/`.
+
 ## Undoing a sweep
 
 ```sh

@@ -34,7 +34,7 @@
     "cadence": "Every 6h via launchd. node is the entrypoint because TCC grants are per-binary: /bin/zsh is denied ~/Documents under launchd, node at its absolute path is granted. Verified by probe 2026-08-06.",
     "forceAfterHours": "A project unchanged since its last sweep is skipped and costs nothing. This forces a pass anyway after 168h (7 days) so a stale index cannot hide behind unchanged forever.",
     "mergeCompressionFloor": "A merged body must keep at least 40% of the combined bytes of its sources. The first live run cut 8733B to 1287B (15%) while claiming no facts were lost, having dropped Composer from the flat-rate routing rule. Deduplication removes repetition, not content.",
-    "strayDrain": "Scheduled drain of unwrapped transcripts. /wrap only mines 8 per run because it reads each into the live session's context, so the backlog outran it and sessions began declining the work. maxPerRun bounds one run; the job is restartable and the ledger prevents double-mining. Summarisation routes to the cheap open-weight tier at roughly $0.004 per transcript; transcripts the privacy gate refuses are re-run with --engine claude so they bill the subscription and never leave the machine.",
+    "strayDrain": "Scheduled drain of unwrapped transcripts. Discovery is metadata-only and excludes current, recent, nested, symlinked, and already claimed sources. The drainer claims before reading, scans complete input and output, writes append-only records, and emits one metadata-only disposition per selected source. Cheap structured extraction disables automatic frontier escalation. Eligible operational failures may use only the approved subscription route; privacy, policy, input, and authorization failures stop.",
     "plannerFailover": "Typed memory plans use the Claude subscription first, then the ChatGPT subscription through Codex when quota, plan-limit, credential, timeout, circuit, unavailable-provider, or malformed-response failures occur. Policy, privacy, input, and authorization failures hard-stop. Both children receive no metered API keys; Codex is ephemeral and read-only."
   },
   "forceAfterHours": 168,
@@ -42,6 +42,14 @@
   "strayDrain": {
     "maxPerRun": 400,
     "concurrency": 16,
-    "timeoutMs": 3600000
+    "subscriptionConcurrency": 4,
+    "quiescenceMinutes": 45,
+    "perProviderTimeoutMs": 240000,
+    "perTranscriptDeadlineMs": 900000,
+    "globalDeadlineMs": 3300000,
+    "maxAttemptsPerProvider": 1,
+    "maxSourceBytes": 16000000,
+    "chunkChars": 48000,
+    "maxChunksPerTranscript": 48
   }
 }
