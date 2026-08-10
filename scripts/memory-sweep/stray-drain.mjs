@@ -15,6 +15,7 @@ import {
   closeSync,
   constants,
   existsSync,
+  fstatSync,
   fsyncSync,
   lstatSync,
   mkdtempSync,
@@ -72,12 +73,201 @@ const OPTIONAL_PROGRESS_KEYS = new Set([
   'sourceSha256',
 ]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const REQUESTED_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function integer(value, name, min, max) {
   if (!Number.isSafeInteger(value) || value < min || value > max) {
     throw new Error(`invalid strayDrain.${name}: expected integer ${min}..${max}`);
   }
   return value;
+}
+
+const INVALID_COORDINATOR_ARGUMENTS = 'invalid coordinator arguments';
+
+export function parseCoordinatorArgs(argv) {
+  if (!Array.isArray(argv) || argv.some((value) => typeof value !== 'string'
+      || /[\u0000-\u001f\u007f]/.test(value))) {
+    throw new Error(INVALID_COORDINATOR_ARGUMENTS);
+  }
+  let dryRun = false;
+  let limit = null;
+  let idsFile = null;
+  let legacy = false;
+  const seen = new Set();
+  for (let index = 0; index < argv.length; index += 1) {
+    const flag = argv[index];
+    if (!flag.startsWith('--') || flag.includes('=') || seen.has(flag)) {
+      throw new Error(INVALID_COORDINATOR_ARGUMENTS);
+    }
+    seen.add(flag);
+    if (flag === '--dry-run') {
+      dryRun = true;
+      continue;
+    }
+    if (flag === '--reconcile-legacy') {
+      legacy = true;
+      continue;
+    }
+    if (flag !== '--limit' && flag !== '--ids-file') {
+      throw new Error(INVALID_COORDINATOR_ARGUMENTS);
+    }
+    const value = argv[index + 1];
+    if (typeof value !== 'string' || !value || value.startsWith('--')
+        || /[\u0000-\u001f\u007f]/.test(value)) {
+      throw new Error(INVALID_COORDINATOR_ARGUMENTS);
+    }
+    index += 1;
+    if (flag === '--limit') {
+      if (!/^[1-9][0-9]*$/.test(value)) throw new Error(INVALID_COORDINATOR_ARGUMENTS);
+      limit = Number(value);
+      if (!Number.isSafeInteger(limit)) throw new Error(INVALID_COORDINATOR_ARGUMENTS);
+    } else {
+      idsFile = value;
+    }
+  }
+  if ((idsFile !== null && limit !== null)
+      || (legacy && (argv.length !== 1 || dryRun || limit !== null || idsFile !== null))) {
+    throw new Error(INVALID_COORDINATOR_ARGUMENTS);
+  }
+  return {
+    mode: legacy ? 'legacy' : idsFile !== null ? 'targeted' : 'default',
+    dryRun,
+    limit,
+    idsFile,
+  };
+}
+
+const DEFAULT_REQUESTED_FILE_OPS = {
+  lstatSync,
+  openSync,
+  fstatSync,
+  readFileSync,
+  closeSync,
+};
+
+function privateMode(stat) {
+  return typeof stat.mode === 'bigint'
+    ? (stat.mode & 0o7777n) === 0o600n
+    : (stat.mode & 0o7777) === 0o600;
+}
+
+function stableFileStat(left, right) {
+  return ['dev', 'ino', 'mode', 'nlink', 'size', 'mtimeNs', 'ctimeNs'].every((key) => (
+    left[key] === right[key]
+  ));
+}
+
+export function readRequestedIds(path, {
+  maxBytes = 16 * 1024,
+  maxIds = 400,
+  fileOps = DEFAULT_REQUESTED_FILE_OPS,
+} = {}) {
+  const invalid = () => new Error('invalid requested identifiers file');
+  if (typeof path !== 'string' || !path || /[\u0000-\u001f\u007f]/.test(path)
+      || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 1024 * 1024
+      || !Number.isSafeInteger(maxIds) || maxIds < 1 || maxIds > 400
+      || typeof constants.O_NOFOLLOW !== 'number') {
+    throw invalid();
+  }
+  let fd = null;
+  let result = null;
+  let failed = false;
+  try {
+    const before = fileOps.lstatSync(path, { bigint: true });
+    if (!before.isFile() || before.isSymbolicLink() || !privateMode(before)
+        || before.size < 1n || before.size > BigInt(maxBytes)) throw invalid();
+    fd = fileOps.openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const opened = fileOps.fstatSync(fd, { bigint: true });
+    if (!opened.isFile() || !privateMode(opened) || !stableFileStat(before, opened)) throw invalid();
+    const body = fileOps.readFileSync(fd);
+    if (!Buffer.isBuffer(body) || body.length > maxBytes || body.length !== Number(opened.size)) throw invalid();
+    const afterRead = fileOps.fstatSync(fd, { bigint: true });
+    const afterPath = fileOps.lstatSync(path, { bigint: true });
+    if (!afterRead.isFile() || !afterPath.isFile() || afterPath.isSymbolicLink()
+        || !privateMode(afterRead) || !privateMode(afterPath)
+        || !stableFileStat(opened, afterRead) || !stableFileStat(opened, afterPath)) throw invalid();
+    let raw;
+    try { raw = new TextDecoder('utf-8', { fatal: true }).decode(body); }
+    catch { throw invalid(); }
+    if (!raw.endsWith('\n')) throw invalid();
+    const ids = raw.slice(0, -1).split('\n');
+    if (!ids.length || ids.length > maxIds || ids.some((id) => !REQUESTED_ID_PATTERN.test(id))
+        || new Set(ids).size !== ids.length) throw invalid();
+    result = ids;
+  } catch {
+    failed = true;
+  } finally {
+    if (fd !== null) {
+      try { fileOps.closeSync(fd); } catch { failed = true; }
+    }
+  }
+  if (failed || result === null) throw invalid();
+  return result;
+}
+
+export function selectRequestedCandidates(requestedIds, candidates) {
+  if (!Array.isArray(requestedIds) || !requestedIds.length
+      || requestedIds.some((id) => typeof id !== 'string' || !REQUESTED_ID_PATTERN.test(id))
+      || new Set(requestedIds).size !== requestedIds.length
+      || !Array.isArray(candidates)) {
+    throw new Error('requested candidate is not currently eligible');
+  }
+  const byId = new Map();
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object' || typeof candidate.id !== 'string') continue;
+    const rows = byId.get(candidate.id) ?? [];
+    rows.push(candidate);
+    byId.set(candidate.id, rows);
+  }
+  const selected = [];
+  for (const id of requestedIds) {
+    const matches = byId.get(id) ?? [];
+    if (!matches.length) throw new Error('requested candidate is not currently eligible');
+    if (matches.length !== 1) throw new Error('requested candidate membership is ambiguous');
+    const [candidate] = matches;
+    if (typeof candidate.path !== 'string' || !isAbsolute(candidate.path)
+        || resolve(candidate.path) !== candidate.path || /[\u0000-\u001f\u007f]/.test(candidate.path)
+        || basename(candidate.path) !== `${id}.jsonl`
+        || !Number.isFinite(candidate.mtimeMs) || !Number.isSafeInteger(candidate.size)
+        || candidate.size < 0) {
+      throw new Error('requested candidate metadata is unsafe');
+    }
+    let stat;
+    let real;
+    try {
+      stat = lstatSync(candidate.path);
+      real = realpathSync(candidate.path);
+    } catch {
+      throw new Error('requested candidate metadata is unsafe');
+    }
+    if (!stat.isFile() || stat.isSymbolicLink() || real !== candidate.path
+        || (stat.mode & 0o077) !== 0 || stat.mtimeMs !== candidate.mtimeMs
+        || stat.size !== candidate.size) {
+      throw new Error('requested candidate metadata is unsafe');
+    }
+    selected.push({
+      ...candidate,
+      selectionStat: {
+        dev: stat.dev,
+        ino: stat.ino,
+        mode: stat.mode,
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+        ctimeMs: stat.ctimeMs,
+      },
+    });
+  }
+  return selected;
+}
+
+function assertRequestedSelectionStable(before, after) {
+  if (before.length !== after.length || before.some((row, index) => {
+    const current = after[index];
+    return row.id !== current.id || row.path !== current.path
+      || !isDeepStrictEqual(row.selectionStat, current.selectionStat);
+  })) {
+    throw new Error('requested selection changed during startup recovery');
+  }
 }
 
 export function validateStrayDrainConfig(input) {
@@ -1543,17 +1733,12 @@ function directInvocation() {
 }
 
 async function main() {
-  const argv = process.argv.slice(2);
-  const has = (flag) => argv.includes(flag);
-  const value = (flag) => {
-    const index = argv.indexOf(flag);
-    return index >= 0 ? argv[index + 1] : undefined;
-  };
+  const parsedArgs = parseCoordinatorArgs(process.argv.slice(2));
   const configPath = process.env.STACK_STRAY_CONFIG || DEFAULT_CONFIG;
   const config = JSON.parse(readFileSync(configPath, 'utf8'));
   const bounds = validateStrayDrainConfig(config.strayDrain ?? {});
-  const dryRun = has('--dry-run');
-  const requestedLimit = value('--limit') ? Number(value('--limit')) : bounds.maxPerRun;
+  const dryRun = parsedArgs.dryRun;
+  const requestedLimit = parsedArgs.limit ?? bounds.maxPerRun;
   integer(requestedLimit, 'limit', 1, bounds.maxPerRun);
 
   const projectsRoot = process.env.WRAP_PROJECTS_ROOT || join(HOME, '.claude', 'projects');
@@ -1567,10 +1752,24 @@ async function main() {
   const logDir = join(config.logDir, '..', 'stray-drain');
   const logFile = join(logDir, 'stray-drain.log');
   if (!existsSync(drainer) || !lstatSync(drainer).isFile()) throw new Error(`drainer missing at ${drainer}`);
+  if (parsedArgs.mode === 'legacy') {
+    const child = run(process.execPath, [drainer, '--adopt-legacy-list', ledger], {
+      timeoutMs: bounds.globalDeadlineMs,
+      env: process.env,
+    });
+    if (child.code !== 0) {
+      throw new Error(`legacy reconciliation failed: ${child.failureReason ?? `exit_${child.code}`}`);
+    }
+    process.stdout.write('legacy reconciliation completed\n');
+    return;
+  }
   const selfIds = new Set([
     process.env.CLAUDE_CODE_SESSION_ID,
     process.env.WRAP_SELF_SESSION_ID,
   ].filter(Boolean));
+  const requestedIds = parsedArgs.mode === 'targeted'
+    ? readRequestedIds(parsedArgs.idsFile, { maxIds: bounds.maxPerRun })
+    : null;
   let candidates = discoverCandidates({
     projectsRoot,
     ledgerPath: ledger,
@@ -1578,8 +1777,14 @@ async function main() {
     selfIds,
     quiescenceMinutes: bounds.quiescenceMinutes,
   });
-  const selected = candidates.slice(0, requestedLimit);
+  const selected = requestedIds
+    ? selectRequestedCandidates(requestedIds, candidates)
+    : candidates.slice(0, requestedLimit);
   if (dryRun) {
+    if (requestedIds) {
+      process.stdout.write(`targeted dry run census: requested ${requestedIds.length}; selected ${selected.length}\n`);
+      return;
+    }
     const pending = inspectPendingTransactions(logDir);
     process.stdout.write(`dry run census: eligible ${candidates.length}; selected ${selected.length}; pending ${pending.length}\n`);
     return;
@@ -1612,7 +1817,10 @@ async function main() {
     selfIds,
     quiescenceMinutes: bounds.quiescenceMinutes,
   });
-  const liveSelected = candidates.slice(0, requestedLimit);
+  const liveSelected = requestedIds
+    ? selectRequestedCandidates(requestedIds, candidates)
+    : candidates.slice(0, requestedLimit);
+  if (requestedIds) assertRequestedSelectionStable(selected, liveSelected);
 
   logLine(logFile, `${candidates.length} eligible unclaimed transcript(s); selected ${liveSelected.length}`);
   if (!liveSelected.length) return;
@@ -1752,7 +1960,10 @@ function assertSamePaths(actual, expected) {
 
 if (directInvocation()) {
   main().catch((error) => {
-    process.stderr.write(`stray-drain: ${error.message}\n`);
+    const targeted = process.argv.slice(2).includes('--ids-file');
+    process.stderr.write(targeted
+      ? 'stray-drain: targeted drain failed\n'
+      : `stray-drain: ${error.message}\n`);
     process.exitCode = 1;
   });
 }

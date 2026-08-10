@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import * as fs from 'node:fs';
 
 import {
   buildDrainerArgs,
@@ -24,6 +25,7 @@ import {
   verifyTransactionSpec,
 } from './stray-drain.mjs';
 import { discoverCandidates } from './stray-discovery.mjs';
+import * as coordinator from './stray-drain.mjs';
 
 const WRAPPER = fileURLToPath(new URL('./stray-drain.mjs', import.meta.url));
 const RUN_ID = '123e4567-e89b-42d3-a456-426614174000';
@@ -66,6 +68,176 @@ function transcript(path, ageMinutes = 120) {
   const when = new Date(Date.now() - ageMinutes * 60_000);
   utimesSync(path, when, when);
 }
+
+test('coordinator arguments accept only the explicit normal, targeted, and legacy grammars', () => {
+  assert.equal(typeof coordinator.parseCoordinatorArgs, 'function');
+  assert.deepEqual(coordinator.parseCoordinatorArgs([]), {
+    mode: 'default', dryRun: false, limit: null, idsFile: null,
+  });
+  assert.deepEqual(coordinator.parseCoordinatorArgs(['--dry-run', '--limit', '7']), {
+    mode: 'default', dryRun: true, limit: 7, idsFile: null,
+  });
+  assert.deepEqual(coordinator.parseCoordinatorArgs(['--ids-file', '/safe/requested ids', '--dry-run']), {
+    mode: 'targeted', dryRun: true, limit: null, idsFile: '/safe/requested ids',
+  });
+  assert.deepEqual(coordinator.parseCoordinatorArgs(['--reconcile-legacy']), {
+    mode: 'legacy', dryRun: false, limit: null, idsFile: null,
+  });
+
+  const rejected = [
+    ['--unknown'],
+    ['positional'],
+    ['--dry-run', '--dry-run'],
+    ['--limit'],
+    ['--limit', '0'],
+    ['--limit', '01'],
+    ['--limit', '2', '--limit', '3'],
+    ['--ids-file'],
+    ['--ids-file', '/safe/a', '--ids-file', '/safe/b'],
+    ['--ids-file', '/safe/a', '--limit', '1'],
+    ['--dry-run=true'],
+    ['--limit=2'],
+    ['--ids-file=/safe/a'],
+    ['--reconcile-legacy', '--dry-run'],
+    ['--reconcile-legacy', '--ids-file', '/safe/a'],
+    ['--ids-file', '/safe/private\nvalue'],
+  ];
+  for (const argv of rejected) {
+    assert.throws(() => coordinator.parseCoordinatorArgs(argv), /invalid coordinator arguments/i);
+  }
+  assert.throws(
+    () => coordinator.parseCoordinatorArgs(['--ids-file', '/safe/private\nvalue']),
+    (error) => !error.message.includes('private') && !error.message.includes('value'),
+  );
+});
+
+test('requested identifiers require one stable private canonical identifier per line', () => {
+  assert.equal(typeof coordinator.readRequestedIds, 'function');
+  const root = mkdtempSync(join(tmpdir(), 'stack-stray-requested-ids-'));
+  const requested = join(root, 'requested.txt');
+  const first = '123e4567-e89b-42d3-a456-426614174000';
+  const second = '123e4567-e89b-42d3-a456-426614174001';
+  writeFileSync(requested, `${first}\n${second}\n`, { mode: 0o600 });
+  assert.deepEqual(coordinator.readRequestedIds(requested), [first, second]);
+
+  chmodSync(requested, 0o644);
+  assert.throws(() => coordinator.readRequestedIds(requested), /invalid requested identifiers file/i);
+  chmodSync(requested, 0o600);
+
+  const specialMode = (stat) => ({
+    ...stat,
+    mode: stat.mode | 0o4000n,
+    isFile: () => true,
+    isSymbolicLink: () => false,
+  });
+  const specialModeFileOps = {
+    lstatSync: (path, options) => specialMode(fs.lstatSync(path, options)),
+    openSync: fs.openSync,
+    fstatSync: (fd, options) => specialMode(fs.fstatSync(fd, options)),
+    readFileSync: fs.readFileSync,
+    closeSync: fs.closeSync,
+  };
+  assert.throws(
+    () => coordinator.readRequestedIds(requested, { fileOps: specialModeFileOps }),
+    /invalid requested identifiers file/i,
+  );
+
+  const link = join(root, 'requested-link.txt');
+  symlinkSync(requested, link);
+  assert.throws(() => coordinator.readRequestedIds(link), /invalid requested identifiers file/i);
+
+  for (const body of [
+    `${first}\n${second}`,
+    `${first.toUpperCase()}\n`,
+    `${first}\n${first}\n`,
+    `${first}\n\n`,
+    `${first}\u0000\n`,
+  ]) {
+    writeFileSync(requested, body, { mode: 0o600 });
+    assert.throws(() => coordinator.readRequestedIds(requested), /invalid requested identifiers file/i);
+  }
+
+  writeFileSync(requested, `${first}\n`, { mode: 0o600 });
+  assert.throws(
+    () => coordinator.readRequestedIds(requested, { maxBytes: 8 }),
+    /invalid requested identifiers file/i,
+  );
+
+  const replacement = join(root, 'replacement.txt');
+  writeFileSync(requested, `${first}\n`, { mode: 0o600 });
+  writeFileSync(replacement, `${second}\n`, { mode: 0o600 });
+  const replacingFileOps = {
+    lstatSync: fs.lstatSync,
+    openSync: fs.openSync,
+    fstatSync: fs.fstatSync,
+    closeSync: fs.closeSync,
+    readFileSync(fd) {
+      const body = fs.readFileSync(fd);
+      fs.renameSync(replacement, requested);
+      return body;
+    },
+  };
+  assert.throws(
+    () => coordinator.readRequestedIds(requested, { fileOps: replacingFileOps }),
+    /invalid requested identifiers file/i,
+  );
+  assert.throws(
+    () => coordinator.readRequestedIds(requested, { maxBytes: 8 }),
+    (error) => !error.message.includes(first) && !error.message.includes(second),
+  );
+});
+
+test('requested selection preserves file order and refuses ineligible, ambiguous, or unsafe candidates', () => {
+  assert.equal(typeof coordinator.selectRequestedCandidates, 'function');
+  const root = fs.realpathSync(mkdtempSync(join(tmpdir(), 'stack-stray-requested-selection-')));
+  const first = '123e4567-e89b-42d3-a456-426614174000';
+  const second = '123e4567-e89b-42d3-a456-426614174001';
+  const firstPath = join(root, `${first}.jsonl`);
+  const secondPath = join(root, `${second}.jsonl`);
+  transcript(firstPath);
+  transcript(secondPath, 121);
+  const candidate = (id, path) => {
+    const stat = lstatSync(path);
+    return { id, path, mtimeMs: stat.mtimeMs, size: stat.size };
+  };
+  const candidates = [candidate(first, firstPath), candidate(second, secondPath)];
+  const selected = coordinator.selectRequestedCandidates([second, first], candidates);
+  assert.deepEqual(selected.map(({ id, path }) => [id, path]), [
+    [second, secondPath],
+    [first, firstPath],
+  ]);
+
+  for (const requested of [[first, '123e4567-e89b-42d3-a456-426614174099'], [first]]) {
+    const available = requested.length === 1 ? [] : candidates;
+    assert.throws(
+      () => coordinator.selectRequestedCandidates(requested, available),
+      /requested candidate is not currently eligible/i,
+    );
+  }
+
+  const alternateRoot = fs.realpathSync(mkdtempSync(join(tmpdir(), 'stack-stray-requested-duplicate-')));
+  const alternatePath = join(alternateRoot, `${first}.jsonl`);
+  transcript(alternatePath, 122);
+  assert.throws(
+    () => coordinator.selectRequestedCandidates([first], [candidate(first, firstPath), candidate(first, alternatePath)]),
+    /ambiguous/i,
+  );
+
+  assert.throws(
+    () => coordinator.selectRequestedCandidates([first], [{ ...candidate(first, firstPath), size: 999 }]),
+    /unsafe/i,
+  );
+  assert.throws(
+    () => coordinator.selectRequestedCandidates([first], [{ ...candidate(first, firstPath), path: secondPath }]),
+    /unsafe/i,
+  );
+  for (const error of [
+    () => coordinator.selectRequestedCandidates([first], []),
+    () => coordinator.selectRequestedCandidates([first], [candidate(first, firstPath), candidate(first, alternatePath)]),
+  ]) {
+    assert.throws(error, (failure) => !failure.message.includes(first));
+  }
+});
 
 test('configuration bounds fail closed', () => {
   assert.throws(
@@ -1325,6 +1497,183 @@ test('dry run is a strictly read-only census and never invokes recovery or the d
   assert.equal(existsSync(marker), false);
   assert.equal(existsSync(join(f.root, 'logs', 'stray-drain')), false);
   assert.match(result.stdout, /dry run census.*eligible 1.*selected 1.*pending 0/i);
+});
+
+test('an unknown coordinator flag can never fall back to the default batch', () => {
+  const f = fixture();
+  transcript(join(f.project, 'eligible-id.jsonl'));
+  const marker = join(f.root, 'unexpected-child');
+  const env = wrapperEnvironment(f, `
+    import { writeFileSync } from 'node:fs';
+    writeFileSync(process.env.UNEXPECTED_CHILD_MARKER, 'invoked');
+  `);
+  env.UNEXPECTED_CHILD_MARKER = marker;
+  const result = spawnSync(process.execPath, [WRAPPER, '--bogus'], { env, encoding: 'utf8' });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /invalid coordinator arguments/i);
+  assert.equal(existsSync(marker), false);
+  assert.equal(existsSync(join(f.root, 'logs', 'stray-drain')), false);
+});
+
+test('targeted dry run narrows exactly and performs no recovery or writes', () => {
+  const f = fixture();
+  const requestedId = '123e4567-e89b-42d3-a456-426614174010';
+  const otherId = '123e4567-e89b-42d3-a456-426614174011';
+  transcript(join(f.project, `${requestedId}.jsonl`));
+  transcript(join(f.project, `${otherId}.jsonl`), 121);
+  const idsFile = join(f.root, 'requested.txt');
+  writeFileSync(idsFile, `${requestedId}\n`, { mode: 0o600 });
+  const marker = join(f.root, 'unexpected-targeted-child');
+  const env = wrapperEnvironment(f, `
+    import { writeFileSync } from 'node:fs';
+    writeFileSync(process.env.UNEXPECTED_CHILD_MARKER, 'invoked');
+  `);
+  env.UNEXPECTED_CHILD_MARKER = marker;
+
+  const runDirectory = join(f.root, 'logs', 'stray-drain', 'run-dead-owner');
+  mkdirSync(runDirectory, { recursive: true, mode: 0o700 });
+  const sourcePath = join(f.project, `${requestedId}.jsonl`);
+  writeFileSync(join(runDirectory, 'sources.txt'), `${sourcePath}\n`, { mode: 0o600 });
+  writeFileSync(join(runDirectory, 'progress.jsonl'), '', { mode: 0o600 });
+  writeFileSync(join(runDirectory, 'placement-journal.jsonl'), '', { mode: 0o600 });
+  writeFileSync(join(runDirectory, 'transaction-owner.json'), `${JSON.stringify({
+    schemaVersion: 1, createdAt: '2026-08-09T22:00:00.000Z', ownerPid: 2_147_483_647,
+    vaultHead: 'a'.repeat(40), sources: [{ transcriptId: requestedId, sourcePath }],
+  })}\n`, { mode: 0o600 });
+
+  const result = spawnSync(process.execPath, [WRAPPER, '--ids-file', idsFile, '--dry-run'], {
+    env, encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /targeted dry run census: requested 1; selected 1/i);
+  assert.equal(existsSync(marker), false);
+  assert.equal(existsSync(join(runDirectory, 'transaction-resolution.json')), false);
+  assert.equal(existsSync(join(runDirectory, 'incomplete-progress.json')), false);
+});
+
+test('targeted membership drift after startup recovery is refused before child invocation', () => {
+  const f = fixture();
+  const requestedId = '123e4567-e89b-42d3-a456-426614174020';
+  const sourcePathInput = join(f.project, `${requestedId}.jsonl`);
+  transcript(sourcePathInput);
+  const sourcePath = fs.realpathSync(sourcePathInput);
+  const idsFile = join(f.root, 'requested.txt');
+  writeFileSync(idsFile, `${requestedId}\n`, { mode: 0o600 });
+  const mainChildMarker = join(f.root, 'unexpected-main-child');
+  const env = wrapperEnvironment(f, `
+    import { utimesSync, writeFileSync } from 'node:fs';
+    const args = process.argv.slice(2);
+    if (args.includes('--recover-placement-journal')) {
+      const now = new Date();
+      utimesSync(process.env.TARGET_SOURCE, now, now);
+      process.stdout.write(JSON.stringify({ recovered: 0, released: 0, active: 0, missing: 0, unproven: 0, status: 'reconciled' }) + '\\n');
+    } else {
+      writeFileSync(process.env.UNEXPECTED_MAIN_CHILD, 'invoked');
+    }
+  `);
+  env.TARGET_SOURCE = sourcePath;
+  env.UNEXPECTED_MAIN_CHILD = mainChildMarker;
+  const config = JSON.parse(readFileSync(env.STACK_STRAY_CONFIG, 'utf8'));
+  const vaultHead = spawnSync('git', ['rev-parse', 'HEAD'], {
+    cwd: config.vaultRoot, encoding: 'utf8',
+  }).stdout.trim();
+  const runDirectory = join(f.root, 'logs', 'stray-drain', 'run-membership-drift');
+  mkdirSync(runDirectory, { recursive: true, mode: 0o700 });
+  writeFileSync(join(runDirectory, 'sources.txt'), `${sourcePath}\n`, { mode: 0o600 });
+  writeFileSync(join(runDirectory, 'progress.jsonl'), '', { mode: 0o600 });
+  const claim = {
+    event: 'claim_intent', transcriptId: requestedId, sourcePath,
+    observedAt: '2026-08-09T22:00:00.000Z', runId: RUN_ID, ownerPid: 2_147_483_647,
+  };
+  writeFileSync(join(runDirectory, 'placement-journal.jsonl'), [
+    JSON.stringify(claim),
+    JSON.stringify({ ...claim, event: 'claim_acquired' }),
+    '',
+  ].join('\n'), { mode: 0o600 });
+  writeFileSync(join(runDirectory, 'transaction-owner.json'), `${JSON.stringify({
+    schemaVersion: 1, createdAt: '2026-08-09T22:00:00.000Z', ownerPid: 2_147_483_647,
+    vaultHead, sources: [{ transcriptId: requestedId, sourcePath }],
+  })}\n`, { mode: 0o600 });
+  const lib = join(f.root, 'wrap-lib.sh');
+  writeFileSync(lib, `
+    wrap_lock() { d="${f.root}/membership-drift.lock"; mkdir "$d" || return 1; printf '%s' "$d|$$|token"; }
+    wrap_unlock() { d="\${1%%|*}"; rmdir "$d"; }
+  `, { mode: 0o600 });
+  env.WRAP_LIB = lib;
+
+  const result = spawnSync(process.execPath, [WRAPPER, '--ids-file', idsFile], {
+    env, encoding: 'utf8',
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /^stray-drain: targeted drain failed\n$/i);
+  assert.equal(result.stderr.includes(requestedId), false);
+  assert.equal(existsSync(mainChildMarker), false);
+  assert.equal(
+    readdirSync(join(f.root, 'logs', 'stray-drain')).filter((name) => name.startsWith('run-')).length,
+    1,
+  );
+});
+
+test('targeted mode rejects claimed, self-owned, recent, and excluded-root identifiers before child invocation', async (t) => {
+  for (const category of ['claimed', 'self-owned', 'recent', 'excluded-root']) {
+    await t.test(category, () => {
+      const f = fixture();
+      const requestedId = {
+        claimed: '123e4567-e89b-42d3-a456-426614174030',
+        'self-owned': '123e4567-e89b-42d3-a456-426614174031',
+        recent: '123e4567-e89b-42d3-a456-426614174032',
+        'excluded-root': '123e4567-e89b-42d3-a456-426614174033',
+      }[category];
+      if (category === 'excluded-root') {
+        const excluded = join(f.projects, '-Users-example-excluded');
+        mkdirSync(excluded, { recursive: true });
+        transcript(join(excluded, `${requestedId}.jsonl`));
+      } else {
+        transcript(join(f.project, `${requestedId}.jsonl`), category === 'recent' ? 5 : 120);
+      }
+      if (category === 'claimed') writeFileSync(f.ledger, `${requestedId}\n`, { mode: 0o600 });
+      const idsFile = join(f.root, 'requested.txt');
+      writeFileSync(idsFile, `${requestedId}\n`, { mode: 0o600 });
+      const marker = join(f.root, 'unexpected-ineligible-child');
+      const env = wrapperEnvironment(f, `
+        import { writeFileSync } from 'node:fs';
+        writeFileSync(process.env.UNEXPECTED_CHILD_MARKER, 'invoked');
+      `);
+      env.UNEXPECTED_CHILD_MARKER = marker;
+      if (category === 'self-owned') env.WRAP_SELF_SESSION_ID = requestedId;
+      const result = spawnSync(process.execPath, [WRAPPER, '--ids-file', idsFile], {
+        env, encoding: 'utf8',
+      });
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /^stray-drain: targeted drain failed\n$/i);
+      assert.equal(result.stderr.includes(requestedId), false);
+      assert.equal(existsSync(marker), false);
+      assert.equal(existsSync(join(f.root, 'logs', 'stray-drain')), false);
+    });
+  }
+});
+
+test('legacy reconciliation delegates one configured ledger path without discovery or pre-read', () => {
+  const f = fixture();
+  const argsMarker = join(f.root, 'legacy-args.json');
+  const ledgerPath = join(f.root, 'intentionally-absent-ledger.txt');
+  const env = wrapperEnvironment(f, `
+    import { writeFileSync } from 'node:fs';
+    writeFileSync(process.env.LEGACY_ARGS_MARKER, JSON.stringify(process.argv.slice(2)), { mode: 0o600 });
+    process.stdout.write(JSON.stringify({ status: 'reconciled', selected: 0 }) + '\\n');
+  `);
+  env.LEGACY_ARGS_MARKER = argsMarker;
+  env.WRAP_LEDGER = ledgerPath;
+  env.WRAP_PROJECTS_ROOT = join(f.root, 'intentionally-absent-projects');
+  const result = spawnSync(process.execPath, [WRAPPER, '--reconcile-legacy'], {
+    env, encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(argsMarker, 'utf8')), [
+    '--adopt-legacy-list', ledgerPath,
+  ]);
+  assert.equal(existsSync(ledgerPath), false);
+  assert.equal(existsSync(join(f.root, 'logs', 'stray-drain')), false);
 });
 
 test('a nonzero drainer blocks parsing and Git mutation', () => {
