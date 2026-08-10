@@ -675,6 +675,26 @@ export function reconcileRunEvidence({ progressRaw, journalRaw = '', expected, s
       if (expectedById.has(row.transcriptId)) blocked.add(row.transcriptId);
       continue;
     }
+    const existing = accepted.get(row.transcriptId);
+    const matchingAcquisition = journal.claimAcquired.some((claim) => (
+      claim.transcriptId === row.transcriptId
+      && claim.sourcePath === row.sourcePath
+      && claim.runId === row.runId
+      && claim.observedAt === row.observedAt
+    ));
+    const hasPlacementEvidence = journal.intents.some((intent) => intent.transcriptId === row.transcriptId)
+      || journal.placed.some((placed) => placed.transcriptId === row.transcriptId);
+    if (existing?.status === 'provider_failed'
+        && row.status === 'claim_error'
+        && row.detailCode === 'recovered-dead-owner-before-placement'
+        && existing.transcriptId === row.transcriptId
+        && existing.sourcePath === row.sourcePath
+        && existing.runId === row.runId
+        && existing.observedAt === row.observedAt
+        && matchingAcquisition
+        && !hasPlacementEvidence) {
+      continue;
+    }
     accept(row, 'supplemental_progress_conflict');
   }
 
