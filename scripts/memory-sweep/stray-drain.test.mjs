@@ -2495,6 +2495,9 @@ test('legacy commit failure quarantines exact records and invokes only explicit 
     } else if (args.includes('--verify-legacy-progress')) {
       if (!existsSync(process.env.FAKE_LOCK_MARKER)) process.exit(9);
       process.stdout.write(JSON.stringify({ verified: 1, status: 'needs_commit' }) + '\\n');
+    } else if (args.includes('--finalize-legacy-progress')) {
+      if (!existsSync(process.env.FAKE_LOCK_MARKER)) process.exit(9);
+      process.stdout.write(JSON.stringify({ finalized: 1, released: 1, status: 'captured' }) + '\\n');
     } else if (args.includes('--abort-legacy-progress')) {
       if (!existsSync(process.env.FAKE_LOCK_MARKER)) process.exit(9);
       const manifest = JSON.parse(readFileSync(get('--recovery-manifest'), 'utf8'));
@@ -2537,6 +2540,147 @@ test('legacy commit failure quarantines exact records and invokes only explicit 
   assert.equal(JSON.parse(readFileSync(join(runDirectory, 'legacy-resolution.json'), 'utf8')).status, 'aborted');
   assert.equal(readFileSync(f.ledger, 'utf8'), `${legacyId}\n`);
   assert.equal(existsSync(lockMarker), false);
+});
+
+test('legacy commit-msg hook runs before an exact durable commit', () => {
+  const f = fixture();
+  const legacyId = '123e4567-e89b-42d3-a456-426614174092';
+  const sourcePath = join(f.project, `${legacyId}.jsonl`);
+  transcript(sourcePath);
+  writeFileSync(f.ledger, `${legacyId}\n`, { mode: 0o600 });
+  const calls = join(f.root, 'legacy-message-hook-calls.jsonl');
+  const env = wrapperEnvironment(f, `
+    import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+    import { createHash } from 'node:crypto';
+    import { join } from 'node:path';
+    const args = process.argv.slice(2);
+    const get = (flag) => args[args.indexOf(flag) + 1];
+    const hash = (body) => createHash('sha256').update(body).digest('hex');
+    appendFileSync(process.env.LEGACY_CALLS, JSON.stringify(args) + '\\n', { mode: 0o600 });
+    if (args.includes('--adopt-legacy-list')) {
+      const runId = get('--legacy-run-id'); const token = get('--legacy-token');
+      const sourcePath = process.env.LEGACY_SOURCE; const sourceBody = readFileSync(sourcePath);
+      const recordPath = join(process.env.FAKE_VAULT, 'project-memory', 'documents', 'sessions', 'legacy-message-hook.md');
+      mkdirSync(join(recordPath, '..'), { recursive: true, mode: 0o700 });
+      const recordBody = Buffer.from('# message hook\\n'); writeFileSync(recordPath, recordBody, { mode: 0o600 });
+      const row = { transcriptId: process.env.LEGACY_ID, sourcePath, status: 'mined',
+        observedAt: '2026-08-09T22:00:00.000Z', runId, project: 'documents', chars: sourceBody.length,
+        chunks: 1, sourceSha256: hash(sourceBody), recordPath, recordSha256: hash(recordBody),
+        requestedSlot: 'bulk_summarize', provider: 'cheap-cli', resolvedModel: null,
+        accountType: 'configured-cli', failureReason: null, providerAttempts: [{ engine: 'cheap',
+          requestedSlot: 'bulk_summarize', provider: 'cheap-cli', resolvedModel: null,
+          accountType: 'configured-cli', outcome: 'success', failureReason: null }] };
+      appendFileSync(get('--out'), JSON.stringify(row) + '\\n');
+      const { status, recordPath: placedPath, ...proof } = row;
+      appendFileSync(get('--placement-journal'), JSON.stringify({ legacyPlacementVersion: 1,
+        event: 'intent', token, ...proof, desiredRecordPath: placedPath }) + '\\n');
+      appendFileSync(get('--placement-journal'), JSON.stringify({ legacyPlacementVersion: 1,
+        event: 'placed', token, ...row }) + '\\n');
+      writeFileSync(get('--dispositions'), '', { flag: 'a', mode: 0o600 });
+      process.stdout.write(JSON.stringify({ selected: 1, processed: 1, pending: 1,
+        counts: { mined: 1 }, status: 'needs_commit' }) + '\\n');
+    } else if (args.includes('--verify-legacy-progress')) {
+      if (!existsSync(process.env.FAKE_LOCK_MARKER)) process.exit(9);
+      process.stdout.write(JSON.stringify({ verified: 1, status: 'needs_commit' }) + '\\n');
+    } else if (args.includes('--finalize-legacy-progress')) {
+      if (!existsSync(process.env.FAKE_LOCK_MARKER)) process.exit(9);
+      process.stdout.write(JSON.stringify({ finalized: 1, released: 1, status: 'captured' }) + '\\n');
+    } else if (args.includes('--abort-legacy-progress')) {
+      if (!existsSync(process.env.FAKE_LOCK_MARKER)) process.exit(9);
+      const manifest = JSON.parse(readFileSync(get('--recovery-manifest'), 'utf8'));
+      if (manifest.entries.length !== 1 || !existsSync(manifest.entries[0].recoveryPath)) process.exit(8);
+      process.stdout.write(JSON.stringify({ aborted: 1, released: 1, status: 'aborted' }) + '\\n');
+    } else process.exit(19);
+  `);
+  const vault = JSON.parse(readFileSync(env.STACK_STRAY_CONFIG, 'utf8')).vaultRoot;
+  const lib = join(f.root, 'wrap-lib.sh');
+  const lockMarker = join(f.root, 'legacy-message-hook.lock');
+  writeFileSync(lib, `
+    wrap_lock() { d="$FAKE_LOCK_MARKER"; mkdir "$d" || return 1; printf '%s' "$d|$$|token"; }
+    wrap_unlock() { d="\${1%%|*}"; rmdir "$d"; }
+  `, { mode: 0o600 });
+  const scanner = join(f.root, 'scanner.mjs');
+  writeFileSync(scanner, 'process.exit(0);\n', { mode: 0o700 });
+  const prepareHookMarker = join(f.root, 'prepare-commit-msg-hook-ran');
+  const prepareHook = join(vault, '.git', 'hooks', 'prepare-commit-msg');
+  writeFileSync(prepareHook, '#!/bin/sh\nprintf hook-ran > "$PREPARE_HOOK_MARKER"\n', { mode: 0o700 });
+  const hookMarker = join(f.root, 'commit-msg-hook-ran');
+  const hook = join(vault, '.git', 'hooks', 'commit-msg');
+  writeFileSync(hook, '#!/bin/sh\nprintf hook-ran > "$HOOK_MARKER"\n', { mode: 0o700 });
+  Object.assign(env, {
+    LEGACY_CALLS: calls, LEGACY_SOURCE: sourcePath, LEGACY_ID: legacyId,
+    FAKE_VAULT: vault, FAKE_LOCK_MARKER: lockMarker, WRAP_LIB: lib, WRAP_SCANNER: scanner,
+    WRAP_LEGACY_STATE_ROOT: join(f.root, 'legacy-state'),
+    HOOK_MARKER: hookMarker,
+    PREPARE_HOOK_MARKER: prepareHookMarker,
+  });
+  const beforeHead = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: vault, encoding: 'utf8' }).stdout.trim();
+  const result = spawnSync(process.execPath, [WRAPPER, '--reconcile-legacy'], { env, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.notEqual(spawnSync('git', ['rev-parse', 'HEAD'], { cwd: vault, encoding: 'utf8' }).stdout.trim(), beforeHead);
+  assert.equal(existsSync(prepareHookMarker), true);
+  assert.equal(existsSync(hookMarker), true);
+  assert.equal(existsSync(join(vault, 'project-memory', 'documents', 'sessions', 'legacy-message-hook.md')), true);
+  const invocations = readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(invocations.map((args) => args[0]), [
+    '--adopt-legacy-list', '--verify-legacy-progress', '--finalize-legacy-progress',
+  ]);
+  const legacyRoot = join(f.root, 'logs', 'stray-drain-legacy');
+  const runName = readdirSync(legacyRoot).find((name) => name.startsWith('legacy-run-'));
+  const runDirectory = join(legacyRoot, runName);
+  assert.equal(JSON.parse(readFileSync(join(runDirectory, 'legacy-resolution.json'), 'utf8')).status, 'captured');
+  assert.equal(readFileSync(f.ledger, 'utf8'), `${legacyId}\n`);
+  assert.equal(existsSync(lockMarker), false);
+});
+
+test('legacy post-hook commit-message mutation is rejected before tree creation', () => {
+  const f = fixture();
+  const sourcePath = join(f.project, '123e4567-e89b-42d3-a456-426614174093.jsonl');
+  transcript(sourcePath);
+  const env = wrapperEnvironment(f, 'process.exit(19);');
+  const vault = JSON.parse(readFileSync(env.STACK_STRAY_CONFIG, 'utf8')).vaultRoot;
+  const recordPath = join(vault, 'project-memory', 'documents', 'sessions', 'post-hook-message.md');
+  mkdirSync(join(recordPath, '..'), { recursive: true, mode: 0o700 });
+  const sourceBody = readFileSync(sourcePath);
+  const recordBody = Buffer.from('# frozen record\n');
+  writeFileSync(recordPath, recordBody, { mode: 0o600 });
+  const runDirectory = mkdtempSync(join(f.root, 'legacy-post-hook-message-'));
+  chmodSync(runDirectory, 0o700);
+  const row = {
+    transcriptId: '123e4567-e89b-42d3-a456-426614174093',
+    sourcePath,
+    status: 'mined',
+    observedAt: '2026-08-09T22:00:00.000Z',
+    runId: RUN_ID,
+    project: 'documents',
+    chars: sourceBody.length,
+    chunks: 1,
+    sourceSha256: createHash('sha256').update(sourceBody).digest('hex'),
+    recordPath,
+    recordSha256: createHash('sha256').update(recordBody).digest('hex'),
+    ...PROVIDER_PROOF,
+  };
+  const beforeHead = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: vault, encoding: 'utf8' }).stdout.trim();
+  const transaction = coordinator.materializeLegacyTransaction({
+    runDirectory,
+    vault,
+    mined: [row],
+    beforeHead,
+    runId: RUN_ID,
+    token: 'a'.repeat(64),
+  });
+  writeFileSync(transaction.messageFile, 'changed by hook\n', { mode: 0o600 });
+  assert.throws(
+    () => coordinator.prepareLegacyCommitTree(
+      transaction.specPath, vault, join(f.root, 'scanner.mjs'), RUN_ID, 'a'.repeat(64),
+    ),
+    /legacy transaction commit message proof is invalid/,
+  );
+  assert.equal(spawnSync('git', ['rev-parse', 'HEAD'], { cwd: vault, encoding: 'utf8' }).stdout.trim(), beforeHead);
+  assert.equal(
+    spawnSync('git', ['diff', '--cached', '--name-only'], { cwd: vault, encoding: 'utf8' }).stdout.trim(),
+    '',
+  );
 });
 
 test('legacy unrelated head advance aborts exact untracked records instead of stranding recovery', () => {

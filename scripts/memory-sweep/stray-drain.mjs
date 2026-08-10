@@ -2514,6 +2514,14 @@ export function verifyLegacyStagedTransaction(
   execute = run,
 ) {
   const spec = readLegacyTransactionSpec(specPath, vault, runId, token);
+  const expectedPaths = spec.rows.map((item) => item.recordRelative).sort();
+  const stagedPaths = execute('git', [
+    'diff', '--cached', '--name-only', '--no-renames', '-z', spec.beforeHead,
+  ], { cwd: realpathSync(vault) });
+  const actualPaths = stagedPaths.stdout.split('\0').filter(Boolean).sort();
+  if (stagedPaths.code !== 0 || !isDeepStrictEqual(actualPaths, expectedPaths)) {
+    throw new Error('legacy staged transaction paths are not exact');
+  }
   return verifyStagedRecordBlobs({
     vault,
     scanner,
@@ -2524,6 +2532,26 @@ export function verifyLegacyStagedTransaction(
     })),
     execute,
   });
+}
+
+export function prepareLegacyCommitTree(specPath, vault, scanner, runId, token, execute = run) {
+  const spec = readLegacyTransactionSpec(specPath, vault, runId, token);
+  verifyLegacyStagedTransaction(specPath, vault, scanner, runId, token, execute);
+  readLegacyTransactionCommitMessage(specPath, vault, runId, token);
+  const tree = execute('git', ['write-tree'], { cwd: realpathSync(vault) });
+  const treeOid = tree.stdout.trim();
+  if (tree.code !== 0 || !/^[a-f0-9]{40,64}$/.test(treeOid)) {
+    throw new Error('legacy staged transaction tree is invalid');
+  }
+  const changed = execute('git', [
+    'diff', '--name-only', '--no-renames', '-z', spec.beforeHead, treeOid,
+  ], { cwd: realpathSync(vault) });
+  const actualPaths = changed.stdout.split('\0').filter(Boolean).sort();
+  const expectedPaths = spec.rows.map((item) => item.recordRelative).sort();
+  if (changed.code !== 0 || !isDeepStrictEqual(actualPaths, expectedPaths)) {
+    throw new Error('legacy commit tree paths are not exact');
+  }
+  return treeOid;
 }
 
 function commitLegacyExact({
@@ -2553,7 +2581,9 @@ function commitLegacyExact({
     'expected="${14}"',
     'verify_receipt="${15}"',
     'commit_oid="${16}"',
-    'shift 16',
+    'message_file="${17}"',
+    'base="${18}"',
+    'shift 18',
     'lk="$(wrap_lock "vault-$vault" 60)" || exit 70',
     'index="$(mktemp "$vault/.legacy-adoption-index.XXXXXX")" || exit 72',
     'rm -f "$index" || exit 72',
@@ -2565,12 +2595,13 @@ function commitLegacyExact({
     'git -C "$vault" read-tree HEAD || exit 72',
     'git -C "$vault" add -- "$@" || exit 72',
     'node --input-type=module -e \'const m=await import(process.argv[2]); m.verifyLegacyStagedTransaction(process.argv[3],process.argv[4],process.argv[5],process.argv[6],process.argv[7]);\' stack-legacy "$wrapper" "$spec" "$vault" "$scanner" "$run_id" "$token" || exit 72',
-    'pre_hook="$(git -C "$vault" rev-parse --git-path hooks/pre-commit)" || exit 72',
-    'case "$pre_hook" in /*) ;; *) pre_hook="$vault/$pre_hook";; esac',
-    '[ ! -e "$pre_hook" ] || git -C "$vault" hook run pre-commit || exit 72',
-    'node --input-type=module -e \'const m=await import(process.argv[2]); m.verifyLegacyStagedTransaction(process.argv[3],process.argv[4],process.argv[5],process.argv[6],process.argv[7]);\' stack-legacy "$wrapper" "$spec" "$vault" "$scanner" "$run_id" "$token" || exit 72',
-    'node --input-type=module -e \'const m=await import(process.argv[2]); process.stdout.write(m.readLegacyTransactionCommitMessage(process.argv[3],process.argv[4],process.argv[5],process.argv[6]));\' stack-legacy "$wrapper" "$spec" "$vault" "$run_id" "$token" | git -C "$vault" commit --no-verify -F - || exit 72',
-    'oid="$(git -C "$vault" rev-parse HEAD)" || exit 73',
+    'run_hook_if_present() { hook_name="$1"; shift; hook_path="$(git -C "$vault" rev-parse --git-path "hooks/$hook_name")" || return 1; case "$hook_path" in /*) ;; *) hook_path="$vault/$hook_path";; esac; [ ! -e "$hook_path" ] || git -C "$vault" hook run "$hook_name" -- "$@"; }',
+    'run_hook_if_present pre-commit || exit 72',
+    'run_hook_if_present prepare-commit-msg "$message_file" message || exit 72',
+    'run_hook_if_present commit-msg "$message_file" || exit 72',
+    'tree="$(node --input-type=module -e \'const m=await import(process.argv[2]); process.stdout.write(m.prepareLegacyCommitTree(process.argv[3],process.argv[4],process.argv[5],process.argv[6],process.argv[7]));\' stack-legacy "$wrapper" "$spec" "$vault" "$scanner" "$run_id" "$token")" || exit 72',
+    'oid="$(node --input-type=module -e \'const m=await import(process.argv[2]); process.stdout.write(m.readLegacyTransactionCommitMessage(process.argv[3],process.argv[4],process.argv[5],process.argv[6]));\' stack-legacy "$wrapper" "$spec" "$vault" "$run_id" "$token" | git -C "$vault" commit-tree "$tree" -p "$base")" || exit 72',
+    'git -C "$vault" update-ref HEAD "$oid" "$base" || exit 73',
     'unset GIT_INDEX_FILE',
     'git -C "$vault" reset --quiet HEAD -- "$@" || exit 73',
     'printf "%s\\n" "$oid" | node --input-type=module -e \'const fs=await import("node:fs"); const m=await import(process.argv[2]); m.persistLegacyCommitReceipt(process.argv[3], fs.readFileSync(0,"utf8"));\' stack-legacy "$wrapper" "$commit_oid" || exit 73',
@@ -2580,7 +2611,7 @@ function commitLegacyExact({
     marker.progressPath, marker.placementJournalPath, marker.dispositionsPath,
     marker.stateRoot, marker.runId, marker.token, transaction.specPath, scanner,
     String(marker.tuning.quiescenceMinutes), String(transaction.paths.length),
-    transaction.verifyReceipt, transaction.commitOid,
+    transaction.verifyReceipt, transaction.commitOid, transaction.messageFile, marker.vaultHead,
     ...transaction.paths,
   ], { timeoutMs, maxBuffer: 1024 * 1024 });
 }
