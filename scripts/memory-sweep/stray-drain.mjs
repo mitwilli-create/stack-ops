@@ -22,6 +22,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   readdirSync,
   realpathSync,
   renameSync,
@@ -74,6 +75,11 @@ const OPTIONAL_PROGRESS_KEYS = new Set([
 ]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const REQUESTED_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const CONTROL_CHARACTER_PATTERN = /\p{Cc}/u;
+
+function hasControlCharacter(value) {
+  return CONTROL_CHARACTER_PATTERN.test(value);
+}
 
 function integer(value, name, min, max) {
   if (!Number.isSafeInteger(value) || value < min || value > max) {
@@ -86,7 +92,7 @@ const INVALID_COORDINATOR_ARGUMENTS = 'invalid coordinator arguments';
 
 export function parseCoordinatorArgs(argv) {
   if (!Array.isArray(argv) || argv.some((value) => typeof value !== 'string'
-      || /[\u0000-\u001f\u007f]/.test(value))) {
+      || hasControlCharacter(value))) {
     throw new Error(INVALID_COORDINATOR_ARGUMENTS);
   }
   let dryRun = false;
@@ -113,7 +119,7 @@ export function parseCoordinatorArgs(argv) {
     }
     const value = argv[index + 1];
     if (typeof value !== 'string' || !value || value.startsWith('--')
-        || /[\u0000-\u001f\u007f]/.test(value)) {
+        || hasControlCharacter(value)) {
       throw new Error(INVALID_COORDINATOR_ARGUMENTS);
     }
     index += 1;
@@ -141,7 +147,7 @@ const DEFAULT_REQUESTED_FILE_OPS = {
   lstatSync,
   openSync,
   fstatSync,
-  readFileSync,
+  readSync,
   closeSync,
 };
 
@@ -163,7 +169,7 @@ export function readRequestedIds(path, {
   fileOps = DEFAULT_REQUESTED_FILE_OPS,
 } = {}) {
   const invalid = () => new Error('invalid requested identifiers file');
-  if (typeof path !== 'string' || !path || /[\u0000-\u001f\u007f]/.test(path)
+  if (typeof path !== 'string' || !path || hasControlCharacter(path)
       || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 1024 * 1024
       || !Number.isSafeInteger(maxIds) || maxIds < 1 || maxIds > 400
       || typeof constants.O_NOFOLLOW !== 'number') {
@@ -179,8 +185,16 @@ export function readRequestedIds(path, {
     fd = fileOps.openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     const opened = fileOps.fstatSync(fd, { bigint: true });
     if (!opened.isFile() || !privateMode(opened) || !stableFileStat(before, opened)) throw invalid();
-    const body = fileOps.readFileSync(fd);
-    if (!Buffer.isBuffer(body) || body.length > maxBytes || body.length !== Number(opened.size)) throw invalid();
+    const buffer = Buffer.allocUnsafe(maxBytes + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const count = fileOps.readSync(fd, buffer, length, buffer.length - length, null);
+      if (!Number.isSafeInteger(count) || count < 0 || count > buffer.length - length) throw invalid();
+      if (count === 0) break;
+      length += count;
+    }
+    const body = buffer.subarray(0, length);
+    if (body.length > maxBytes || body.length !== Number(opened.size)) throw invalid();
     const afterRead = fileOps.fstatSync(fd, { bigint: true });
     const afterPath = fileOps.lstatSync(path, { bigint: true });
     if (!afterRead.isFile() || !afterPath.isFile() || afterPath.isSymbolicLink()
@@ -226,7 +240,7 @@ export function selectRequestedCandidates(requestedIds, candidates) {
     if (matches.length !== 1) throw new Error('requested candidate membership is ambiguous');
     const [candidate] = matches;
     if (typeof candidate.path !== 'string' || !isAbsolute(candidate.path)
-        || resolve(candidate.path) !== candidate.path || /[\u0000-\u001f\u007f]/.test(candidate.path)
+        || resolve(candidate.path) !== candidate.path || hasControlCharacter(candidate.path)
         || basename(candidate.path) !== `${id}.jsonl`
         || !Number.isFinite(candidate.mtimeMs) || !Number.isSafeInteger(candidate.size)
         || candidate.size < 0) {

@@ -69,6 +69,38 @@ function transcript(path, ageMinutes = 120) {
   utimesSync(path, when, when);
 }
 
+function snapshotTree(root) {
+  const rows = [];
+  const visit = (path, relativePath) => {
+    const stat = fs.lstatSync(path, { bigint: true });
+    const base = {
+      path: relativePath || '.',
+      mode: stat.mode.toString(),
+      size: stat.size.toString(),
+      mtimeNs: stat.mtimeNs.toString(),
+      ctimeNs: stat.ctimeNs.toString(),
+    };
+    if (stat.isSymbolicLink()) {
+      rows.push({ ...base, type: 'symlink', target: fs.readlinkSync(path) });
+      return;
+    }
+    if (stat.isDirectory()) {
+      rows.push({ ...base, type: 'directory' });
+      for (const name of fs.readdirSync(path).sort()) {
+        visit(join(path, name), relativePath ? join(relativePath, name) : name);
+      }
+      return;
+    }
+    rows.push({
+      ...base,
+      type: 'file',
+      sha256: createHash('sha256').update(readFileSync(path)).digest('hex'),
+    });
+  };
+  visit(root, '');
+  return rows;
+}
+
 test('coordinator arguments accept only the explicit normal, targeted, and legacy grammars', () => {
   assert.equal(typeof coordinator.parseCoordinatorArgs, 'function');
   assert.deepEqual(coordinator.parseCoordinatorArgs([]), {
@@ -101,6 +133,8 @@ test('coordinator arguments accept only the explicit normal, targeted, and legac
     ['--reconcile-legacy', '--dry-run'],
     ['--reconcile-legacy', '--ids-file', '/safe/a'],
     ['--ids-file', '/safe/private\nvalue'],
+    ['--ids-file', '/safe/private\u0085value'],
+    ['--ids-file', '/safe/private\u009bvalue'],
   ];
   for (const argv of rejected) {
     assert.throws(() => coordinator.parseCoordinatorArgs(argv), /invalid coordinator arguments/i);
@@ -119,6 +153,22 @@ test('requested identifiers require one stable private canonical identifier per 
   const second = '123e4567-e89b-42d3-a456-426614174001';
   writeFileSync(requested, `${first}\n${second}\n`, { mode: 0o600 });
   assert.deepEqual(coordinator.readRequestedIds(requested), [first, second]);
+
+  for (const control of ['\u0085', '\u009b']) {
+    let touchedFilesystem = false;
+    assert.throws(
+      () => coordinator.readRequestedIds(`${requested}${control}`, {
+        fileOps: {
+          lstatSync() {
+            touchedFilesystem = true;
+            throw new Error('unexpected filesystem access');
+          },
+        },
+      }),
+      /invalid requested identifiers file/i,
+    );
+    assert.equal(touchedFilesystem, false);
+  }
 
   chmodSync(requested, 0o644);
   assert.throws(() => coordinator.readRequestedIds(requested), /invalid requested identifiers file/i);
@@ -163,18 +213,47 @@ test('requested identifiers require one stable private canonical identifier per 
     /invalid requested identifiers file/i,
   );
 
+  const maxBytes = 64;
+  const growingBody = Buffer.alloc(maxBytes * 4, 0x61);
+  let bytesConsumed = 0;
+  const growingFileOps = {
+    lstatSync: fs.lstatSync,
+    openSync: fs.openSync,
+    fstatSync: fs.fstatSync,
+    closeSync: fs.closeSync,
+    readFileSync() {
+      bytesConsumed = growingBody.length;
+      return growingBody;
+    },
+    readSync(_fd, buffer, offset, length) {
+      const count = Math.min(length, growingBody.length - bytesConsumed);
+      growingBody.copy(buffer, offset, bytesConsumed, bytesConsumed + count);
+      bytesConsumed += count;
+      return count;
+    },
+  };
+  assert.throws(
+    () => coordinator.readRequestedIds(requested, { maxBytes, fileOps: growingFileOps }),
+    /invalid requested identifiers file/i,
+  );
+  assert.equal(bytesConsumed, maxBytes + 1);
+
   const replacement = join(root, 'replacement.txt');
   writeFileSync(requested, `${first}\n`, { mode: 0o600 });
   writeFileSync(replacement, `${second}\n`, { mode: 0o600 });
+  let replaced = false;
   const replacingFileOps = {
     lstatSync: fs.lstatSync,
     openSync: fs.openSync,
     fstatSync: fs.fstatSync,
     closeSync: fs.closeSync,
-    readFileSync(fd) {
-      const body = fs.readFileSync(fd);
-      fs.renameSync(replacement, requested);
-      return body;
+    readSync(fd, buffer, offset, length, position) {
+      const count = fs.readSync(fd, buffer, offset, length, position);
+      if (!replaced) {
+        fs.renameSync(replacement, requested);
+        replaced = true;
+      }
+      return count;
     },
   };
   assert.throws(
@@ -200,6 +279,15 @@ test('requested selection preserves file order and refuses ineligible, ambiguous
     const stat = lstatSync(path);
     return { id, path, mtimeMs: stat.mtimeMs, size: stat.size };
   };
+  for (const control of ['\u0085', '\u009b']) {
+    const controlledRoot = fs.realpathSync(mkdtempSync(join(tmpdir(), `stack-stray-${control}-`)));
+    const controlledPath = join(controlledRoot, `${first}.jsonl`);
+    transcript(controlledPath);
+    assert.throws(
+      () => coordinator.selectRequestedCandidates([first], [candidate(first, controlledPath)]),
+      /unsafe/i,
+    );
+  }
   const candidates = [candidate(first, firstPath), candidate(second, secondPath)];
   const selected = coordinator.selectRequestedCandidates([second, first], candidates);
   assert.deepEqual(selected.map(({ id, path }) => [id, path]), [
@@ -1541,6 +1629,7 @@ test('targeted dry run narrows exactly and performs no recovery or writes', () =
     vaultHead: 'a'.repeat(40), sources: [{ transcriptId: requestedId, sourcePath }],
   })}\n`, { mode: 0o600 });
 
+  const beforeTree = snapshotTree(f.root);
   const result = spawnSync(process.execPath, [WRAPPER, '--ids-file', idsFile, '--dry-run'], {
     env, encoding: 'utf8',
   });
@@ -1549,6 +1638,7 @@ test('targeted dry run narrows exactly and performs no recovery or writes', () =
   assert.equal(existsSync(marker), false);
   assert.equal(existsSync(join(runDirectory, 'transaction-resolution.json')), false);
   assert.equal(existsSync(join(runDirectory, 'incomplete-progress.json')), false);
+  assert.deepEqual(snapshotTree(f.root), beforeTree);
 });
 
 test('targeted membership drift after startup recovery is refused before child invocation', () => {
@@ -1653,10 +1743,12 @@ test('targeted mode rejects claimed, self-owned, recent, and excluded-root ident
   }
 });
 
-test('legacy reconciliation delegates one configured ledger path without discovery or pre-read', () => {
+test('legacy reconciliation delegates one present unreadable ledger path without discovery or pre-read', () => {
   const f = fixture();
   const argsMarker = join(f.root, 'legacy-args.json');
-  const ledgerPath = join(f.root, 'intentionally-absent-ledger.txt');
+  const ledgerPath = join(f.root, 'present-unreadable-ledger.txt');
+  writeFileSync(ledgerPath, 'synthetic-ledger-evidence\n', { mode: 0o600 });
+  chmodSync(ledgerPath, 0o000);
   const env = wrapperEnvironment(f, `
     import { writeFileSync } from 'node:fs';
     writeFileSync(process.env.LEGACY_ARGS_MARKER, JSON.stringify(process.argv.slice(2)), { mode: 0o600 });
@@ -1672,7 +1764,7 @@ test('legacy reconciliation delegates one configured ledger path without discove
   assert.deepEqual(JSON.parse(readFileSync(argsMarker, 'utf8')), [
     '--adopt-legacy-list', ledgerPath,
   ]);
-  assert.equal(existsSync(ledgerPath), false);
+  assert.equal(lstatSync(ledgerPath).mode & 0o777, 0o000);
   assert.equal(existsSync(join(f.root, 'logs', 'stray-drain')), false);
 });
 
