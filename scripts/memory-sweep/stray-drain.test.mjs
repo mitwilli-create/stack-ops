@@ -1612,7 +1612,10 @@ test('commit failure rolls back under the vault lock and preserves unrelated sta
   }
   writeFileSync(join(vault, 'unrelated.txt'), 'preserve staged state\n');
   assert.equal(spawnSync('git', ['add', '--', 'unrelated.txt'], { cwd: vault }).status, 0);
-  const hook = join(vault, '.git', 'hooks', 'pre-commit');
+  const hooksPath = join(f.root, 'custom-failing-hooks');
+  mkdirSync(hooksPath, { recursive: true, mode: 0o700 });
+  assert.equal(spawnSync('git', ['config', 'core.hooksPath', hooksPath], { cwd: vault }).status, 0);
+  const hook = join(hooksPath, 'pre-commit');
   writeFileSync(hook, '#!/bin/sh\nexit 1\n', { mode: 0o700 });
 
   const logDir = join(f.root, 'logs', 'memory-sweep');
@@ -2601,12 +2604,21 @@ test('legacy commit-msg hook runs before an exact durable commit', () => {
   `, { mode: 0o600 });
   const scanner = join(f.root, 'scanner.mjs');
   writeFileSync(scanner, 'process.exit(0);\n', { mode: 0o700 });
+  const hooksPath = join(f.root, 'custom-hooks');
+  mkdirSync(hooksPath, { recursive: true, mode: 0o700 });
+  assert.equal(spawnSync('git', ['config', 'core.hooksPath', hooksPath], { cwd: vault }).status, 0);
   const prepareHookMarker = join(f.root, 'prepare-commit-msg-hook-ran');
-  const prepareHook = join(vault, '.git', 'hooks', 'prepare-commit-msg');
+  const prepareHook = join(hooksPath, 'prepare-commit-msg');
   writeFileSync(prepareHook, '#!/bin/sh\nprintf hook-ran > "$PREPARE_HOOK_MARKER"\n', { mode: 0o700 });
   const hookMarker = join(f.root, 'commit-msg-hook-ran');
-  const hook = join(vault, '.git', 'hooks', 'commit-msg');
-  writeFileSync(hook, '#!/bin/sh\nprintf hook-ran > "$HOOK_MARKER"\n', { mode: 0o700 });
+  const hook = join(hooksPath, 'commit-msg');
+  writeFileSync(hook, [
+    '#!/bin/sh',
+    '[ "$GIT_TERMINAL_PROMPT" = 0 ] || exit 20',
+    '[ "$GIT_EDITOR" = : ] || exit 21',
+    'printf hook-ran > "$HOOK_MARKER"',
+    '',
+  ].join('\n'), { mode: 0o700 });
   Object.assign(env, {
     LEGACY_CALLS: calls, LEGACY_SOURCE: sourcePath, LEGACY_ID: legacyId,
     FAKE_VAULT: vault, FAKE_LOCK_MARKER: lockMarker, WRAP_LIB: lib, WRAP_SCANNER: scanner,
