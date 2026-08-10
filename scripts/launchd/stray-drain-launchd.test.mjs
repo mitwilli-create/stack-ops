@@ -33,6 +33,7 @@ test('stray drain launchd delegates through the Tahoe nohup wrapper', () => {
   assert.match(wrapper, /--credential-fd 0/);
   assert.match(wrapper, /\/usr\/bin\/env -i/);
   assert.doesNotMatch(wrapper, /CLEAN_ENV\+=\("\$\{CHEAP_KEY_NAME\}=\$\{CHEAP_KEY_VALUE\}"\)/);
+  assert.doesNotMatch(wrapper, /^\s*cd\s+/m);
   assert.match(wrapper, /__STACK_OPS_REPO__/);
   assert.match(wrapper, /__STACK_OPS_LOG_DIR__/);
 });
@@ -43,6 +44,47 @@ test('installer renders, validates, and bootstraps the exact wrapper', () => {
   assert.match(installer, /plutil -lint/);
   assert.match(installer, /launchctl bootstrap/);
   assert.match(installer, /com\.mitchell\.stack-ops\.stray-drain/);
+});
+
+test('installer helper securely creates every missing HOME-scoped parent on first install', () => {
+  const root = mkdtempSync(join(tmpdir(), 'stray-drain-installer-fresh-home-'));
+  try {
+    const home = join(root, 'home');
+    const repo = dirname(dirname(here));
+    const runtimeDir = join(home, '.local', 'stack-ops');
+    const plistDir = join(home, 'Library', 'LaunchAgents');
+    const logDir = join(home, 'Library', 'Logs', 'stack-ops', 'stray-drain');
+    mkdirSync(home, { mode: 0o700 });
+
+    const result = spawnSync(process.execPath, [join(here, 'stray-drain-install-files.mjs'), 'prepare',
+      '--repo', repo,
+      '--runtime-dir', runtimeDir,
+      '--plist-dir', plistDir,
+      '--log-dir', logDir,
+    ], { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+
+    assert.equal(result.status, 0, result.stderr);
+    for (const path of [
+      join(home, '.local'), runtimeDir,
+      join(home, 'Library'), join(home, 'Library', 'Logs'), join(home, 'Library', 'Logs', 'stack-ops'),
+      logDir, plistDir,
+    ]) {
+      const stat = lstatSync(path);
+      assert.equal(stat.isDirectory(), true, path);
+      assert.equal(stat.isSymbolicLink(), false, path);
+      assert.equal((stat.mode & 0o777), 0o700, path);
+    }
+    assert.equal((lstatSync(join(logDir, 'launchd.out')).mode & 0o777), 0o600);
+    assert.equal((lstatSync(join(logDir, 'launchd.err')).mode & 0o777), 0o600);
+    assert.equal((lstatSync(join(plistDir, 'com.mitchell.stack-ops.stray-drain.plist')).mode & 0o777), 0o600);
+
+    const rollback = spawnSync(process.execPath, [
+      join(here, 'stray-drain-install-files.mjs'), 'rollback', result.stdout.trim(),
+    ], { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+    assert.equal(rollback.status, 0, rollback.stderr);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('rendered wrapper detaches the exact scheduler command', async () => {

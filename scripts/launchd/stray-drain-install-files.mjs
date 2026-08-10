@@ -83,6 +83,16 @@ function ensurePrivateDirectory(path, label) {
   closeSync(fd);
 }
 
+function ensureOwnedDirectory(path, label) {
+  let created = false;
+  if (!pathEntryExists(path)) {
+    withPrivateUmask(() => mkdirSync(path, { mode: PRIVATE_DIRECTORY_MODE }));
+    created = true;
+  }
+  const fd = openDirectory(path, label, created ? PRIVATE_DIRECTORY_MODE : null);
+  closeSync(fd);
+}
+
 function openRegular(path, label, expectedMode, flags = constants.O_RDONLY) {
   const before = lstatSync(path);
   if (!before.isFile() || before.isSymbolicLink() || !ownedByCurrentUser(before)
@@ -273,10 +283,14 @@ function prepare(values) {
       || logDir !== join(home, 'Library', 'Logs', 'stack-ops', 'stray-drain')) {
     throw new Error('installation paths do not match the exact HOME-scoped targets');
   }
+  ensureOwnedDirectory(home, 'HOME directory');
+  ensureOwnedDirectory(join(home, '.local'), '.local directory');
   ensurePrivateDirectory(runtimeDir, 'runtime directory');
+  ensureOwnedDirectory(join(home, 'Library'), 'Library directory');
+  ensureOwnedDirectory(join(home, 'Library', 'Logs'), 'Library Logs directory');
+  ensureOwnedDirectory(join(home, 'Library', 'Logs', 'stack-ops'), 'Stack Ops log parent');
   ensurePrivateDirectory(logDir, 'log directory');
-  const plistDirFd = openDirectory(plistDir, 'LaunchAgents directory');
-  closeSync(plistDirFd);
+  ensureOwnedDirectory(plistDir, 'LaunchAgents directory');
   const entries = [];
   const runtimeWrapper = join(runtimeDir, 'stray-drain-nohup-wrapper.zsh');
   const runtimeBootstrap = join(runtimeDir, 'stray-drain-bootstrap.mjs');

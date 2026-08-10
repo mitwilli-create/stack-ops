@@ -28,7 +28,6 @@ if [[ -z "${NODE_BIN}" ]]; then
   exit 1
 fi
 
-cd "${REPO}" || exit 1
 typeset -a CLEAN_ENV
 CLEAN_ENV=(
   "HOME=${HOME}"
