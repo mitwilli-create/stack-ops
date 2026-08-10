@@ -18,6 +18,7 @@ import {
   fstatSync,
   fsyncSync,
   lstatSync,
+  linkSync,
   mkdtempSync,
   mkdirSync,
   openSync,
@@ -26,10 +27,11 @@ import {
   readdirSync,
   realpathSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
   writeSync,
 } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,6 +58,7 @@ const RETRYABLE = new Set([
   'orphan_claim',
 ]);
 const PROGRESS_STATUSES = new Set(['mined', ...TERMINAL_NO_RECORD, ...RETRYABLE]);
+const LEGACY_PROGRESS_STATUSES = new Set([...PROGRESS_STATUSES, 'legacy_source_missing']);
 const BASE_PROGRESS_KEYS = ['observedAt', 'runId', 'sourcePath', 'status', 'transcriptId'];
 const OPTIONAL_PROGRESS_KEYS = new Set([
   'accountType',
@@ -141,6 +144,61 @@ export function parseCoordinatorArgs(argv) {
     limit,
     idsFile,
   };
+}
+
+export function parseLegacyAdoptionReceipt(raw) {
+  const invalid = () => new Error('invalid legacy adoption receipt');
+  if (typeof raw !== 'string' || !raw.endsWith('\n')) throw invalid();
+  const body = raw.slice(0, -1);
+  if (!body || /[\r\n]/.test(body)) throw invalid();
+  let receipt;
+  try { receipt = JSON.parse(body); } catch { throw invalid(); }
+  const keys = ['counts', 'pending', 'processed', 'selected', 'status'];
+  if (!receipt || Array.isArray(receipt) || typeof receipt !== 'object'
+      || !exactObjectKeys(receipt, keys)
+      || !receipt.counts || Array.isArray(receipt.counts) || typeof receipt.counts !== 'object') {
+    throw invalid();
+  }
+  for (const key of ['selected', 'processed', 'pending']) {
+    if (!Number.isSafeInteger(receipt[key]) || receipt[key] < 0 || receipt[key] > 400) throw invalid();
+  }
+  let total = 0;
+  for (const [status, count] of Object.entries(receipt.counts)) {
+    if (!LEGACY_PROGRESS_STATUSES.has(status)
+        || !Number.isSafeInteger(count) || count < 1 || count > 400) throw invalid();
+    total += count;
+  }
+  const mined = receipt.counts.mined ?? 0;
+  if (receipt.selected !== receipt.processed || receipt.selected !== total
+      || receipt.pending !== mined
+      || receipt.status !== (mined > 0 ? 'needs_commit' : 'reconciled')) {
+    throw invalid();
+  }
+  return receipt;
+}
+
+export function parseLegacyPhaseReceipt(raw, phase, expected) {
+  const invalid = () => new Error('invalid legacy phase receipt');
+  if (!Number.isSafeInteger(expected) || expected < 0 || expected > 400
+      || typeof raw !== 'string' || !raw.endsWith('\n')) throw invalid();
+  const body = raw.slice(0, -1);
+  if (!body || /[\r\n]/.test(body)) throw invalid();
+  let receipt;
+  try { receipt = JSON.parse(body); } catch { throw invalid(); }
+  if (hasForbiddenKey(receipt)) throw invalid();
+  const contracts = {
+    verify: { keys: ['status', 'verified'], count: 'verified', success: 'needs_commit' },
+    finalize: { keys: ['finalized', 'released', 'status'], count: 'finalized', success: 'captured' },
+    abort: { keys: ['aborted', 'released', 'status'], count: 'aborted', success: 'aborted' },
+  };
+  const contract = contracts[phase];
+  if (!contract || !exactObjectKeys(receipt, contract.keys)
+      || !Number.isSafeInteger(receipt[contract.count])
+      || receipt[contract.count] !== expected || receipt[contract.count] < 0
+      || receipt[contract.count] > 400
+      || receipt.status !== (expected > 0 ? contract.success : 'reconciled')) throw invalid();
+  if ((phase === 'finalize' || phase === 'abort') && receipt.released !== expected) throw invalid();
+  return receipt;
 }
 
 const DEFAULT_REQUESTED_FILE_OPS = {
@@ -331,6 +389,39 @@ export function buildDrainerArgs({
   return args;
 }
 
+export function buildLegacyDrainerArgs({
+  drainer,
+  ledger,
+  stateRoot,
+  progress,
+  placementJournal,
+  dispositions,
+  runId,
+  token,
+  bounds,
+}) {
+  return [
+    drainer,
+    '--adopt-legacy-list', ledger,
+    '--legacy-state-root', stateRoot,
+    '--out', progress,
+    '--placement-journal', placementJournal,
+    '--dispositions', dispositions,
+    '--legacy-run-id', runId,
+    '--legacy-token', token,
+    '--limit', String(bounds.maxPerRun),
+    '--concurrency', String(bounds.concurrency),
+    '--subscription-concurrency', String(bounds.subscriptionConcurrency),
+    '--quiescence-minutes', String(bounds.quiescenceMinutes),
+    '--provider-timeout-ms', String(bounds.perProviderTimeoutMs),
+    '--transcript-deadline-ms', String(bounds.perTranscriptDeadlineMs),
+    '--max-attempts-per-provider', String(bounds.maxAttemptsPerProvider),
+    '--max-source-bytes', String(bounds.maxSourceBytes),
+    '--chunk-chars', String(bounds.chunkChars),
+    '--max-chunks', String(bounds.maxChunksPerTranscript),
+  ];
+}
+
 function writeNewPrivateDurable(path, body) {
   const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
   try {
@@ -345,6 +436,79 @@ function writeNewPrivateDurable(path, body) {
 function fsyncDirectory(directory) {
   const fd = openSync(directory, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try { fsyncSync(fd); } finally { closeSync(fd); }
+}
+
+function sameStableFile(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode
+    && left.nlink === right.nlink && left.size === right.size
+    && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
+}
+
+function readPrivateStable(path, label, maxBytes = 16 * 1024 * 1024) {
+  let before;
+  try { before = lstatSync(path); }
+  catch { throw new Error(`${label} is unavailable`); }
+  if (!before.isFile() || before.isSymbolicLink() || (before.mode & 0o777) !== 0o600
+      || before.size > maxBytes) {
+    throw new Error(`${label} is not an exact private regular file`);
+  }
+  let fd;
+  try { fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)); }
+  catch { throw new Error(`${label} could not be opened safely`); }
+  const chunks = [];
+  let total = 0;
+  let during;
+  let afterFd;
+  try {
+    during = fstatSync(fd);
+    if (!sameStableFile(before, during)) throw new Error(`${label} changed before read`);
+    while (total <= maxBytes) {
+      const buffer = Buffer.alloc(Math.min(64 * 1024, maxBytes + 1 - total));
+      const count = readSync(fd, buffer, 0, buffer.length, null);
+      if (count === 0) break;
+      chunks.push(buffer.subarray(0, count));
+      total += count;
+    }
+    if (total > maxBytes) throw new Error(`${label} exceeds its size bound`);
+    afterFd = fstatSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  const after = lstatSync(path);
+  if (!sameStableFile(before, afterFd) || !sameStableFile(before, after)) {
+    throw new Error(`${label} changed during read`);
+  }
+  return Buffer.concat(chunks);
+}
+
+function readPrivateStableText(path, label, maxBytes) {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(readPrivateStable(path, label, maxBytes));
+  } catch (error) {
+    if (error instanceof TypeError) throw new Error(`${label} is not valid UTF-8`);
+    throw error;
+  }
+}
+
+const hashPrivateStable = (path, label, maxBytes) => createHash('sha256')
+  .update(readPrivateStable(path, label, maxBytes)).digest('hex');
+
+function ensurePrivateDirectory(path, label) {
+  const stat = lstatSync(path);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o777) !== 0o700) {
+    throw new Error(`${label} directory is not private`);
+  }
+  return path;
+}
+
+function ensureOrCreatePrivateDirectory(path, label) {
+  if (existsSync(path)) return ensurePrivateDirectory(path, label);
+  try { mkdirSync(path, { recursive: true, mode: 0o700 }); }
+  catch {
+    if (!existsSync(path)) throw new Error(`${label} directory could not be created`);
+  }
+  ensurePrivateDirectory(path, label);
+  return path;
 }
 
 export function createRunArtifacts(logDir, selected, ownership = {}) {
@@ -380,6 +544,346 @@ export function createRunArtifacts(logDir, selected, ownership = {}) {
   };
 }
 
+function validLegacyTuning(tuning, tuningKeys) {
+  if (!exactObjectKeys(tuning, tuningKeys)) return false;
+  try {
+    const checked = validateStrayDrainConfig(tuning);
+    return tuningKeys.every((key) => checked[key] === tuning[key]);
+  } catch {
+    return false;
+  }
+}
+
+export function createLegacyRunArtifacts(logDir, {
+  stateRoot,
+  ledgerPath,
+  dispositionsPath,
+  drainerPath,
+  vaultPath,
+  vaultHead,
+  tuning,
+}) {
+  const paths = [logDir, stateRoot, ledgerPath, dispositionsPath, drainerPath, vaultPath];
+  const tuningKeys = [
+    'chunkChars', 'concurrency', 'maxAttemptsPerProvider', 'maxChunksPerTranscript',
+    'maxPerRun', 'maxSourceBytes', 'perProviderTimeoutMs', 'perTranscriptDeadlineMs',
+    'quiescenceMinutes', 'subscriptionConcurrency',
+  ];
+  if (paths.some((path) => typeof path !== 'string' || !isAbsolute(path) || hasControlCharacter(path))
+      || !/^[a-f0-9]{40,64}$/.test(vaultHead)
+      || !validLegacyTuning(tuning, tuningKeys)) {
+    throw new Error('invalid legacy run metadata');
+  }
+  ensureOrCreatePrivateDirectory(logDir, 'legacy run root');
+  const runDirectory = mkdtempSync(join(logDir, 'legacy-run-'));
+  chmodSync(runDirectory, 0o700);
+  ensurePrivateDirectory(runDirectory, 'legacy run');
+  const runId = randomUUID();
+  const token = randomBytes(32).toString('hex');
+  const progress = join(runDirectory, 'progress.jsonl');
+  const placementJournal = join(runDirectory, 'placement-journal.jsonl');
+  const transactionOwner = join(runDirectory, 'transaction-owner.json');
+  const legacyRun = join(runDirectory, 'legacy-run.json');
+  const createdAt = new Date().toISOString();
+  writeNewPrivateDurable(progress, `${JSON.stringify({
+    legacyProgressVersion: 1, event: 'marker', runId, token,
+  })}\n`);
+  writeNewPrivateDurable(placementJournal, `${JSON.stringify({
+    legacyPlacementVersion: 1, event: 'marker', runId, token,
+  })}\n`);
+  writeNewPrivateDurable(transactionOwner, `${JSON.stringify({
+    schemaVersion: 1,
+    createdAt,
+    ownerPid: process.pid,
+    vaultHead,
+    sources: [],
+  })}\n`);
+  writeNewPrivateDurable(legacyRun, `${JSON.stringify({
+    legacyRunVersion: 1,
+    event: 'legacy_run',
+    createdAt,
+    ownerPid: process.pid,
+    vaultHead,
+    runId,
+    token,
+    stateRoot,
+    ledgerPath,
+    dispositionsPath,
+    drainerPath,
+    vaultPath,
+    tuning,
+    progressPath: progress,
+    placementJournalPath: placementJournal,
+  })}\n`);
+  fsyncDirectory(runDirectory);
+  fsyncDirectory(logDir);
+  return {
+    runDirectory, runId, token, progress, placementJournal, transactionOwner, legacyRun,
+  };
+}
+
+export function readLegacyRunMarker(runDirectory) {
+  ensurePrivateDirectory(runDirectory, 'legacy run');
+  const path = join(runDirectory, 'legacy-run.json');
+  let marker;
+  try { marker = JSON.parse(readPrivateStableText(path, 'legacy run marker')); }
+  catch { throw new Error('legacy run marker is malformed'); }
+  const keys = [
+    'createdAt', 'dispositionsPath', 'drainerPath', 'event', 'ledgerPath',
+    'legacyRunVersion', 'ownerPid', 'placementJournalPath', 'progressPath',
+    'runId', 'stateRoot', 'token', 'tuning', 'vaultHead', 'vaultPath',
+  ];
+  const tuningKeys = [
+    'chunkChars', 'concurrency', 'maxAttemptsPerProvider', 'maxChunksPerTranscript',
+    'maxPerRun', 'maxSourceBytes', 'perProviderTimeoutMs', 'perTranscriptDeadlineMs',
+    'quiescenceMinutes', 'subscriptionConcurrency',
+  ];
+  if (!exactObjectKeys(marker, keys) || marker.legacyRunVersion !== 1
+      || marker.event !== 'legacy_run' || !UUID_PATTERN.test(marker.runId)
+      || !/^[a-f0-9]{64}$/.test(marker.token) || !/^[a-f0-9]{40,64}$/.test(marker.vaultHead)
+      || typeof marker.createdAt !== 'string'
+      || new Date(marker.createdAt).toISOString() !== marker.createdAt
+      || !Number.isSafeInteger(marker.ownerPid) || marker.ownerPid <= 0
+      || !validLegacyTuning(marker.tuning, tuningKeys)) {
+    throw new Error('legacy run marker is invalid');
+  }
+  for (const key of [
+    'stateRoot', 'ledgerPath', 'dispositionsPath', 'drainerPath', 'vaultPath',
+    'progressPath', 'placementJournalPath',
+  ]) {
+    if (typeof marker[key] !== 'string' || !isAbsolute(marker[key]) || hasControlCharacter(marker[key])) {
+      throw new Error('legacy run marker has unsafe metadata');
+    }
+  }
+  if (marker.progressPath !== join(runDirectory, 'progress.jsonl')
+      || marker.placementJournalPath !== join(runDirectory, 'placement-journal.jsonl')) {
+    throw new Error('legacy run marker artifact path mismatch');
+  }
+  readPrivateStable(marker.progressPath, 'legacy progress ledger');
+  readPrivateStable(marker.placementJournalPath, 'legacy placement journal');
+  return marker;
+}
+
+export function legacyTransactionOwnerIsActive(runDirectory) {
+  const marker = readLegacyRunMarker(runDirectory);
+  let owner;
+  try {
+    owner = JSON.parse(readPrivateStableText(
+      join(runDirectory, 'transaction-owner.json'), 'legacy transaction owner',
+    ));
+  } catch (error) {
+    if (/exact private regular file/i.test(error.message)) throw error;
+    throw new Error('legacy transaction owner is malformed');
+  }
+  if (!exactObjectKeys(owner, ['createdAt', 'ownerPid', 'schemaVersion', 'sources', 'vaultHead'])
+      || owner.schemaVersion !== 1 || owner.createdAt !== marker.createdAt
+      || owner.ownerPid !== marker.ownerPid || owner.vaultHead !== marker.vaultHead
+      || !Array.isArray(owner.sources) || owner.sources.length !== 0) {
+    throw new Error('legacy transaction owner is invalid');
+  }
+  try {
+    process.kill(owner.ownerPid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ESRCH') return false;
+    return true;
+  }
+}
+
+function persistLegacyAdoptionReceipt(path, raw) {
+  const receipt = parseLegacyAdoptionReceipt(raw);
+  writeLegacyPrivateAtomicIfAbsent(path, `${JSON.stringify(receipt)}\n`, 'legacy adoption receipt');
+  return receipt;
+}
+
+export function persistLegacyPhaseReceipt(path, raw, phase, expected) {
+  const receipt = parseLegacyPhaseReceipt(raw, phase, expected);
+  writeLegacyPrivateAtomicIfAbsent(path, `${JSON.stringify(receipt)}\n`, `legacy ${phase} receipt`);
+  return receipt;
+}
+
+function readLegacyAdoptionReceipt(path) {
+  return parseLegacyAdoptionReceipt(readPrivateStableText(path, 'legacy adoption receipt'));
+}
+
+function writeLegacyResolution(runDirectory, marker, { status, records, commit = null }) {
+  if (!['reconciled', 'captured', 'aborted'].includes(status)
+      || !Number.isSafeInteger(records) || records < 0 || records > 400
+      || (status === 'captured') !== Boolean(commit)
+      || (commit !== null && !/^[a-f0-9]{40,64}$/.test(commit))) {
+    throw new Error('invalid legacy resolution');
+  }
+  const path = join(runDirectory, 'legacy-resolution.json');
+  writeLegacyPrivateAtomicIfAbsent(path, `${JSON.stringify({
+    version: 1,
+    event: 'legacy_resolution',
+    runId: marker.runId,
+    token: marker.token,
+    status,
+    records,
+    commit,
+  })}\n`, 'legacy resolution');
+  return path;
+}
+
+function readLegacyResolution(path, marker) {
+  let value;
+  try { value = JSON.parse(readPrivateStableText(path, 'legacy resolution')); }
+  catch { throw new Error('legacy resolution is malformed'); }
+  if (!exactObjectKeys(value, ['commit', 'event', 'records', 'runId', 'status', 'token', 'version'])
+      || value.version !== 1 || value.event !== 'legacy_resolution'
+      || value.runId !== marker.runId || value.token !== marker.token
+      || !['reconciled', 'captured', 'aborted'].includes(value.status)
+      || !Number.isSafeInteger(value.records) || value.records < 0 || value.records > 400
+      || (value.status === 'captured') !== Boolean(value.commit)
+      || (value.commit !== null && !/^[a-f0-9]{40,64}$/.test(value.commit))) {
+    throw new Error('legacy resolution is invalid');
+  }
+  return value;
+}
+
+function processLegacyRun({ runDirectory, timeoutMs, lib, scanner, wrapper }) {
+  const marker = readLegacyRunMarker(runDirectory);
+  const resolution = join(runDirectory, 'legacy-resolution.json');
+  if (existsSync(resolution)) {
+    const resolved = readLegacyResolution(resolution, marker);
+    return { status: resolved.status, records: resolved.records, commit: resolved.commit };
+  }
+  const receiptPath = join(runDirectory, 'legacy-adoption-receipt.json');
+  let receipt;
+  if (existsSync(receiptPath)) {
+    receipt = readLegacyAdoptionReceipt(receiptPath);
+  } else {
+    const child = run(process.execPath, buildLegacyDrainerArgs({
+      drainer: marker.drainerPath,
+      ledger: marker.ledgerPath,
+      stateRoot: marker.stateRoot,
+      progress: marker.progressPath,
+      placementJournal: marker.placementJournalPath,
+      dispositions: marker.dispositionsPath,
+      runId: marker.runId,
+      token: marker.token,
+      bounds: marker.tuning,
+    }), {
+      timeoutMs,
+      maxBuffer: 64 * 1024,
+      env: { ...process.env, CHEAP_NO_ESCALATE: '1' },
+    });
+    if (child.code !== 0) throw new Error('legacy adoption child failed');
+    receipt = persistLegacyAdoptionReceipt(receiptPath, child.stdout);
+  }
+  const evidence = reconcileLegacyEvidence({
+    progressRaw: readPrivateStableText(marker.progressPath, 'legacy progress ledger'),
+    placementRaw: readPrivateStableText(marker.placementJournalPath, 'legacy placement journal'),
+    receipt,
+    runId: marker.runId,
+    token: marker.token,
+  });
+  if (!evidence.mined.length) {
+    writeLegacyResolution(runDirectory, marker, { status: 'reconciled', records: 0 });
+    return { status: 'reconciled', records: 0 };
+  }
+  const transaction = materializeLegacyTransaction({
+    runDirectory,
+    vault: marker.vaultPath,
+    mined: evidence.mined,
+    beforeHead: marker.vaultHead,
+    runId: marker.runId,
+    token: marker.token,
+  });
+  let commit;
+  if (existsSync(transaction.commitOid)) {
+    parseLegacyPhaseReceipt(
+      readPrivateStableText(transaction.verifyReceipt, 'legacy verify receipt'),
+      'verify', evidence.mined.length,
+    );
+    commit = persistLegacyCommitReceipt(
+      transaction.commitOid,
+      readPrivateStableText(transaction.commitOid, 'legacy commit receipt'),
+    );
+  } else {
+    const current = run('git', ['rev-parse', 'HEAD'], { cwd: marker.vaultPath });
+    if (current.code !== 0) throw new Error('legacy vault HEAD recovery query failed');
+    if (current.stdout.trim() !== marker.vaultHead) {
+      parseLegacyPhaseReceipt(
+        readPrivateStableText(transaction.verifyReceipt, 'legacy verify receipt'),
+        'verify', evidence.mined.length,
+      );
+      commit = derivePendingCommit(marker.vaultPath, marker.vaultHead, evidence.mined);
+      persistLegacyCommitReceipt(transaction.commitOid, `${commit}\n`);
+    } else {
+      const committed = commitLegacyExact({
+        marker, transaction, lib, scanner, timeoutMs, wrapper,
+      });
+      if (committed.code !== 0) {
+        const afterFailure = run('git', ['rev-parse', 'HEAD'], { cwd: marker.vaultPath });
+        if (afterFailure.code !== 0 || afterFailure.stdout.trim() !== marker.vaultHead) {
+          throw new Error('legacy exact-path commit outcome requires recovery');
+        }
+        const aborted = abortLegacyUnderVaultLock({
+          marker, transaction, lib, timeoutMs, wrapper,
+        });
+        if (aborted.code !== 0) throw new Error('legacy exact-path abort failed');
+        parseLegacyPhaseReceipt(
+          readPrivateStableText(transaction.abortReceipt, 'legacy abort receipt'),
+          'abort', evidence.mined.length,
+        );
+        writeLegacyResolution(runDirectory, marker, {
+          status: 'aborted', records: evidence.mined.length,
+        });
+        throw new Error('legacy exact-path commit aborted');
+      }
+      parseLegacyPhaseReceipt(
+        readPrivateStableText(transaction.verifyReceipt, 'legacy verify receipt'),
+        'verify', evidence.mined.length,
+      );
+      commit = persistLegacyCommitReceipt(
+        transaction.commitOid,
+        readPrivateStableText(transaction.commitOid, 'legacy commit receipt'),
+      );
+    }
+  }
+  verifyCommittedTransaction(marker.vaultPath, evidence.mined, commit);
+  if (existsSync(transaction.finalizeReceipt)) {
+    parseLegacyPhaseReceipt(
+      readPrivateStableText(transaction.finalizeReceipt, 'legacy finalize receipt'),
+      'finalize', evidence.mined.length,
+    );
+  } else {
+    const finalized = finalizeLegacyUnderVaultLock({
+      marker, transaction, commit, lib, timeoutMs, wrapper,
+    });
+    if (finalized.code !== 0) throw new Error('legacy finalization failed');
+    parseLegacyPhaseReceipt(
+      readPrivateStableText(transaction.finalizeReceipt, 'legacy finalize receipt'),
+      'finalize', evidence.mined.length,
+    );
+  }
+  writeLegacyResolution(runDirectory, marker, {
+    status: 'captured', records: evidence.mined.length, commit,
+  });
+  return { status: 'captured', records: evidence.mined.length, commit };
+}
+
+function resumeLegacyTransactions({ legacyRoot, timeoutMs, lib, scanner, wrapper }) {
+  if (!existsSync(legacyRoot)) return [];
+  const resumed = [];
+  for (const entry of readdirSync(legacyRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.isSymbolicLink() || !entry.name.startsWith('legacy-run-')) continue;
+    const runDirectory = join(legacyRoot, entry.name);
+    if (existsSync(join(runDirectory, 'legacy-resolution.json'))) {
+      resumed.push(processLegacyRun({ runDirectory, timeoutMs, lib, scanner, wrapper }));
+      continue;
+    }
+    if (legacyTransactionOwnerIsActive(runDirectory)) {
+      resumed.push({ status: 'owner_active', records: 0 });
+      continue;
+    }
+    resumed.push(processLegacyRun({ runDirectory, timeoutMs, lib, scanner, wrapper }));
+  }
+  return resumed;
+}
+
 function readLedgerStrict(path) {
   if (!existsSync(path)) return new Set();
   let raw;
@@ -409,7 +913,7 @@ function hasForbiddenKey(value) {
   return Object.entries(value).some(([key, child]) => FORBIDDEN_RECEIPT_KEYS.has(key) || hasForbiddenKey(child));
 }
 
-export function parseProgress(raw, expected) {
+export function parseProgress(raw, expected, allowedStatuses = PROGRESS_STATUSES) {
   const rows = [];
   for (const [index, line] of raw.split('\n').entries()) {
     if (!line.trim()) continue;
@@ -423,7 +927,7 @@ export function parseProgress(raw, expected) {
         || typeof row.runId !== 'string') {
       throw new Error(`progress row ${index + 1} is missing required metadata`);
     }
-    if (!PROGRESS_STATUSES.has(row.status)) {
+    if (!allowedStatuses.has(row.status)) {
       throw new Error(`invalid progress status in row ${index + 1}`);
     }
     const observedAt = Date.parse(row.observedAt);
@@ -520,6 +1024,77 @@ export function parseProgress(raw, expected) {
     }
   }
   return rows;
+}
+
+function exactObjectKeys(value, keys) {
+  return value && !Array.isArray(value) && typeof value === 'object'
+    && isDeepStrictEqual(Object.keys(value).sort(), [...keys].sort());
+}
+
+export function reconcileLegacyEvidence({ progressRaw, placementRaw, receipt, runId, token }) {
+  const invalid = () => new Error('invalid legacy evidence');
+  try {
+    if (!UUID_PATTERN.test(runId) || !/^[a-f0-9]{64}$/.test(token)
+        || typeof progressRaw !== 'string' || typeof placementRaw !== 'string') throw invalid();
+    const checkedReceipt = parseLegacyAdoptionReceipt(`${JSON.stringify(receipt)}\n`);
+    const parseLines = (raw) => {
+      if (!raw.endsWith('\n')) throw invalid();
+      return raw.slice(0, -1).split('\n').map((line) => {
+        if (!line || /\r/.test(line)) throw invalid();
+        const value = JSON.parse(line);
+        if (hasForbiddenKey(value) || !value || Array.isArray(value) || typeof value !== 'object') throw invalid();
+        return value;
+      });
+    };
+    const progressValues = parseLines(progressRaw);
+    const progressMarker = progressValues.shift();
+    if (!exactObjectKeys(progressMarker, ['legacyProgressVersion', 'event', 'runId', 'token'])
+        || progressMarker.legacyProgressVersion !== 1 || progressMarker.event !== 'marker'
+        || progressMarker.runId !== runId || progressMarker.token !== token) throw invalid();
+    const rows = progressValues.map((row) => parseProgress(
+      `${JSON.stringify(row)}\n`, null, LEGACY_PROGRESS_STATUSES,
+    )[0]);
+    if (rows.some((row) => row.runId !== runId
+        || !REQUESTED_ID_PATTERN.test(row.transcriptId)
+        || !isAbsolute(row.sourcePath) || hasControlCharacter(row.sourcePath)
+        || (Object.hasOwn(row, 'recordPath') && hasControlCharacter(row.recordPath)))
+        || rows.length !== checkedReceipt.selected) throw invalid();
+    const counts = {};
+    for (const row of rows) counts[row.status] = (counts[row.status] ?? 0) + 1;
+    if (!isDeepStrictEqual(
+      Object.entries(counts).sort(), Object.entries(checkedReceipt.counts).sort(),
+    )) throw invalid();
+
+    const placementValues = parseLines(placementRaw);
+    const placementMarker = placementValues.shift();
+    if (!exactObjectKeys(placementMarker, ['legacyPlacementVersion', 'event', 'runId', 'token'])
+        || placementMarker.legacyPlacementVersion !== 1 || placementMarker.event !== 'marker'
+        || placementMarker.runId !== runId || placementMarker.token !== token) throw invalid();
+    const intents = new Map();
+    const placed = new Map();
+    for (const value of placementValues) {
+      if (value.legacyPlacementVersion !== 1 || value.runId !== runId || value.token !== token
+          || (value.event !== 'intent' && value.event !== 'placed')) throw invalid();
+      const { legacyPlacementVersion, event, token: _token, desiredRecordPath, ...proof } = value;
+      const candidate = parseProgress(`${JSON.stringify({
+        ...proof,
+        status: 'mined',
+        ...(event === 'intent' ? { recordPath: desiredRecordPath } : {}),
+      })}\n`, null, LEGACY_PROGRESS_STATUSES)[0];
+      const target = event === 'intent' ? intents : placed;
+      if (target.has(candidate.transcriptId)) throw invalid();
+      target.set(candidate.transcriptId, candidate);
+    }
+    const mined = rows.filter((row) => row.status === 'mined');
+    if (intents.size !== mined.length || placed.size !== mined.length) throw invalid();
+    for (const row of mined) {
+      if (!isDeepStrictEqual(intents.get(row.transcriptId), row)
+          || !isDeepStrictEqual(placed.get(row.transcriptId), row)) throw invalid();
+    }
+    return { rows, mined };
+  } catch {
+    throw invalid();
+  }
 }
 
 function parseEvidenceLines(raw, label) {
@@ -788,13 +1363,13 @@ export function selectReleasedClaimRows(dispositions, claimIntents) {
   return [...selected.values()];
 }
 
-function run(command, args, { cwd, timeoutMs, env } = {}) {
+function run(command, args, { cwd, timeoutMs, env, maxBuffer = 256 * 1024 * 1024 } = {}) {
   const result = spawnSync(command, args, {
     cwd,
     env: env ?? process.env,
     encoding: 'utf8',
     timeout: timeoutMs,
-    maxBuffer: 256 * 1024 * 1024,
+    maxBuffer,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const failureReason = result.error?.code === 'ETIMEDOUT'
@@ -910,6 +1485,39 @@ function writePrivateAtomicIfAbsent(path, body, label) {
   return path;
 }
 
+function writeLegacyPrivateAtomicIfAbsent(path, body, label) {
+  if (existsSync(path)) {
+    if (readPrivateStableText(path, label) !== body) throw new Error(`${label} conflicts with durable state`);
+    return path;
+  }
+  ensurePrivateDirectory(dirname(path), 'legacy artifact parent');
+  const temporary = join(dirname(path), `.${basename(path)}.tmp-${randomUUID()}`);
+  const fd = openSync(
+    temporary,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0),
+    0o600,
+  );
+  try {
+    writeSync(fd, body);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  chmodSync(temporary, 0o600);
+  try {
+    linkSync(temporary, path);
+  } catch (error) {
+    if (error?.code !== 'EEXIST' || readPrivateStableText(path, label) !== body) {
+      throw new Error(`${label} publication conflicts with durable state`);
+    }
+  } finally {
+    try { unlinkSync(temporary); } catch { /* publication error remains authoritative */ }
+  }
+  chmodSync(path, 0o600);
+  fsyncDirectory(dirname(path));
+  return path;
+}
+
 function verifyCommittedTransaction(vault, minedRows, commit, execute = run) {
   if (!/^[a-f0-9]{40,64}$/i.test(commit)) throw new Error('pending transaction has an invalid commit object id');
   const reachable = execute('git', ['merge-base', '--is-ancestor', commit, 'HEAD'], { cwd: vault });
@@ -933,7 +1541,7 @@ function verifyCommittedTransaction(vault, minedRows, commit, execute = run) {
   assertSamePaths(actualPaths.stdout.split('\n').filter(Boolean).sort(), expectedPaths.sort());
 }
 
-function derivePendingCommit(vault, beforeHead, minedRows, execute = run) {
+export function derivePendingCommit(vault, beforeHead, minedRows, execute = run) {
   if (!/^[a-f0-9]{40,64}$/i.test(beforeHead)) throw new Error('pending transaction has an invalid before object id');
   const ancestor = execute('git', ['merge-base', '--is-ancestor', beforeHead, 'HEAD'], { cwd: vault });
   if (ancestor.code !== 0) throw new Error('pending transaction base is not reachable from vault HEAD');
@@ -1556,6 +2164,347 @@ function materializeTransaction({ runDirectory, vault, mined, beforeHead }) {
   };
 }
 
+function readLegacyTransactionSpec(specPath, vault, expectedRunId, expectedToken) {
+  let spec;
+  try { spec = JSON.parse(readPrivateStableText(specPath, 'legacy transaction specification')); }
+  catch { throw new Error('legacy transaction specification is malformed'); }
+  const keys = [
+    'beforeHead', 'event', 'legacyTransactionVersion', 'quarantineRoot',
+    'rows', 'runId', 'token',
+  ];
+  if (!exactObjectKeys(spec, keys) || spec.legacyTransactionVersion !== 1
+      || spec.event !== 'legacy_transaction' || spec.runId !== expectedRunId
+      || spec.token !== expectedToken || !/^[a-f0-9]{40,64}$/.test(spec.beforeHead)
+      || !Array.isArray(spec.rows) || !spec.rows.length
+      || typeof spec.quarantineRoot !== 'string' || !isAbsolute(spec.quarantineRoot)) {
+    throw new Error('legacy transaction specification is invalid');
+  }
+  const runDirectory = dirname(specPath);
+  if (!contained(resolve(spec.quarantineRoot), resolve(runDirectory))) {
+    throw new Error('legacy transaction quarantine escaped its run');
+  }
+  const vaultRoot = resolve(vault);
+  const seen = new Set();
+  for (const item of spec.rows) {
+    if (!exactObjectKeys(item, ['progress', 'recordRelative'])
+        || typeof item.recordRelative !== 'string'
+        || !/^project-memory\/[^/]+\/sessions\/[^/]+\.md$/.test(item.recordRelative)) {
+      throw new Error('legacy transaction record is invalid');
+    }
+    const [row] = parseProgress(
+      `${JSON.stringify(item.progress)}\n`, null, LEGACY_PROGRESS_STATUSES,
+    );
+    if (row.status !== 'mined' || row.runId !== expectedRunId
+        || relative(vaultRoot, resolve(row.recordPath)) !== item.recordRelative
+        || seen.has(item.recordRelative)) {
+      throw new Error('legacy transaction record proof is invalid');
+    }
+    seen.add(item.recordRelative);
+  }
+  return spec;
+}
+
+export function materializeLegacyTransaction({
+  runDirectory, vault, mined, beforeHead, runId, token,
+}) {
+  if (!UUID_PATTERN.test(runId) || !/^[a-f0-9]{64}$/.test(token)
+      || !/^[a-f0-9]{40,64}$/.test(beforeHead)) {
+    throw new Error('invalid legacy transaction binding');
+  }
+  const specPath = join(runDirectory, 'legacy-transaction.json');
+  const messageFile = join(runDirectory, 'legacy-commit-message.txt');
+  const commitOid = join(runDirectory, 'legacy-commit-oid.txt');
+  const verifyReceipt = join(runDirectory, 'legacy-verify-receipt.json');
+  const finalizeReceipt = join(runDirectory, 'legacy-finalize-receipt.json');
+  const abortReceipt = join(runDirectory, 'legacy-abort-receipt.json');
+  const recoveryManifest = join(runDirectory, 'legacy-abort-manifest.json');
+  const resolution = join(runDirectory, 'legacy-resolution.json');
+  const quarantineRoot = join(runDirectory, 'legacy-quarantine');
+  if (existsSync(specPath)) {
+    const spec = readLegacyTransactionSpec(specPath, vault, runId, token);
+    if (spec.beforeHead !== beforeHead || spec.rows.length !== mined.length
+        || spec.rows.some((item, index) => !isDeepStrictEqual(item.progress, mined[index]))) {
+      throw new Error('legacy transaction specification conflicts with evidence');
+    }
+    return {
+      specPath,
+      paths: spec.rows.map((item) => item.recordRelative),
+      absolutePaths: spec.rows.map((item) => item.progress.recordPath),
+      messageFile,
+      commitOid,
+      verifyReceipt,
+      finalizeReceipt,
+      abortReceipt,
+      recoveryManifest,
+      resolution,
+      quarantineRoot,
+    };
+  }
+  const { paths, absolutePaths } = validateMinedRows(mined, vault);
+  if (!paths.length || mined.some((row) => row.runId !== runId)) {
+    throw new Error('cannot materialize legacy transaction without exact mined evidence');
+  }
+  writeLegacyPrivateAtomicIfAbsent(specPath, `${JSON.stringify({
+    legacyTransactionVersion: 1,
+    event: 'legacy_transaction',
+    runId,
+    token,
+    beforeHead,
+    quarantineRoot,
+    rows: mined.map((row, index) => ({ progress: row, recordRelative: paths[index] })),
+  })}\n`, 'legacy transaction specification');
+  writeLegacyPrivateAtomicIfAbsent(
+    messageFile,
+    `vault: adopt ${paths.length} legacy transcript record(s)\n\n`
+      + `Explicit legacy adoption ${basename(runDirectory)}. Raw transcripts and legacy claims were retained.\n`,
+    'legacy transaction commit message',
+  );
+  readLegacyTransactionSpec(specPath, vault, runId, token);
+  return {
+    specPath,
+    paths,
+    absolutePaths,
+    messageFile,
+    commitOid,
+    verifyReceipt,
+    finalizeReceipt,
+    abortReceipt,
+    recoveryManifest,
+    resolution,
+    quarantineRoot,
+  };
+}
+
+export function quarantineLegacyRecords({
+  specPath,
+  manifestPath,
+  progressPath,
+  placementJournalPath,
+  vault,
+  runId,
+  token,
+  execute = run,
+}) {
+  const progressBody = readPrivateStable(progressPath, 'legacy progress ledger');
+  const placementBody = readPrivateStable(placementJournalPath, 'legacy placement journal');
+  const spec = readLegacyTransactionSpec(specPath, vault, runId, token);
+  ensureOrCreatePrivateDirectory(spec.quarantineRoot, 'legacy quarantine');
+  const entries = [];
+  for (const [index, item] of spec.rows.entries()) {
+    const row = item.progress;
+    const cleared = execute('git', ['update-index', '--force-remove', '--', item.recordRelative], { cwd: vault });
+    if (cleared.code !== 0) throw new Error('legacy quarantine could not clear an exact index path');
+    const recoveryPath = join(spec.quarantineRoot, `${String(index).padStart(3, '0')}-${row.recordSha256}.md`);
+    if (!contained(resolve(recoveryPath), resolve(spec.quarantineRoot))) {
+      throw new Error('legacy quarantine recovery path escaped its run');
+    }
+    const sourceExists = existsSync(row.recordPath);
+    const recoveryExists = existsSync(recoveryPath);
+    if (sourceExists && recoveryExists) throw new Error('legacy quarantine found duplicate record copies');
+    if (sourceExists) {
+      const stat = privateRegular(row.recordPath, 'legacy record');
+      if (!stat.isFile()
+          || relative(realpathSync(vault), realpathSync(row.recordPath)) !== item.recordRelative
+          || hashPrivateStable(row.recordPath, 'legacy record') !== row.recordSha256) {
+        throw new Error('legacy quarantine record proof changed');
+      }
+      renameSync(row.recordPath, recoveryPath);
+      chmodSync(recoveryPath, 0o600);
+      fsyncDirectory(dirname(row.recordPath));
+      fsyncDirectory(spec.quarantineRoot);
+    } else if (!recoveryExists) {
+      throw new Error('legacy quarantine lost its exact record');
+    }
+    if (hashPrivateStable(recoveryPath, 'legacy quarantined record') !== row.recordSha256) {
+      throw new Error('legacy quarantine recovery hash mismatch');
+    }
+    entries.push({
+      transcriptIdSha256: createHash('sha256').update(row.transcriptId).digest('hex'),
+      recordPathSha256: createHash('sha256').update(row.recordPath).digest('hex'),
+      recordSha256: row.recordSha256,
+      recoveryPath,
+      recoverySha256: row.recordSha256,
+    });
+  }
+  writeLegacyPrivateAtomicIfAbsent(manifestPath, `${JSON.stringify({
+    version: 1,
+    runId,
+    token,
+    progressSha256: createHash('sha256').update(progressBody).digest('hex'),
+    placementJournalSha256: createHash('sha256').update(placementBody).digest('hex'),
+    entries,
+  })}\n`, 'legacy abort manifest');
+  return manifestPath;
+}
+
+export function persistLegacyCommitReceipt(path, raw) {
+  if (typeof raw !== 'string' || !/^[a-f0-9]{40,64}\n$/.test(raw)) {
+    throw new Error('invalid legacy commit receipt');
+  }
+  writeLegacyPrivateAtomicIfAbsent(path, raw, 'legacy commit receipt');
+  return raw.trim();
+}
+
+export function verifyLegacyTransactionSpec(
+  specPath,
+  vault,
+  scanner,
+  quiescenceMinutes,
+  runId,
+  token,
+  execute = run,
+) {
+  const spec = readLegacyTransactionSpec(specPath, vault, runId, token);
+  const root = realpathSync(vault);
+  const head = execute('git', ['rev-parse', 'HEAD'], { cwd: root });
+  if (head.code !== 0 || head.stdout.trim() !== spec.beforeHead) {
+    throw new Error('legacy transaction vault base changed before commit');
+  }
+  const cutoff = Date.now() - quiescenceMinutes * 60_000;
+  const recordPaths = [];
+  for (const item of spec.rows) {
+    const row = item.progress;
+    if (!isAbsolute(row.sourcePath) || hasControlCharacter(row.sourcePath)) {
+      throw new Error('legacy source proof is unsafe');
+    }
+    const sourceStat = lstatSync(row.sourcePath);
+    if (!sourceStat.isFile() || sourceStat.isSymbolicLink() || sourceStat.mtimeMs > cutoff) {
+      throw new Error('legacy source is no longer quiet');
+    }
+    const open = execute('/usr/sbin/lsof', ['-t', row.sourcePath], { timeoutMs: 30_000 });
+    if (open.code === 0) throw new Error('legacy source is open');
+    if (open.code !== 1) throw new Error('legacy source ownership check failed');
+    if (hashPrivateStable(row.sourcePath, 'legacy source') !== row.sourceSha256) {
+      throw new Error('legacy source hash changed');
+    }
+    const recordPath = realpathSync(row.recordPath);
+    if (relative(root, recordPath) !== item.recordRelative) {
+      throw new Error('legacy record path proof changed');
+    }
+    if (hashPrivateStable(recordPath, 'legacy record') !== row.recordSha256) {
+      throw new Error('legacy record hash changed');
+    }
+    const tracked = execute('git', ['cat-file', '-e', `HEAD:${item.recordRelative}`], { cwd: root });
+    if (tracked.code === 0) throw new Error('legacy record is already tracked');
+    if (![1, 128].includes(tracked.code)) throw new Error('legacy record history check failed');
+    const untracked = execute('git', ['ls-files', '--others', '--exclude-standard', '--', item.recordRelative], { cwd: root });
+    if (untracked.code !== 0 || untracked.stdout.trim() !== item.recordRelative) {
+      throw new Error('legacy record is not an exact untracked path');
+    }
+    recordPaths.push(recordPath);
+  }
+  scanExactRecords({ scanner, paths: recordPaths, execute });
+  return spec.rows.length;
+}
+
+function commitLegacyExact({
+  marker,
+  transaction,
+  lib,
+  scanner,
+  timeoutMs,
+  wrapper,
+}) {
+  const script = [
+    'set -u',
+    'set -o pipefail',
+    'source "$1"',
+    'vault="$2"',
+    'wrapper="$3"',
+    'drainer="$4"',
+    'progress="$5"',
+    'placement="$6"',
+    'dispositions="$7"',
+    'state_root="$8"',
+    'run_id="$9"',
+    'token="${10}"',
+    'spec="${11}"',
+    'scanner="${12}"',
+    'quiescence="${13}"',
+    'expected="${14}"',
+    'verify_receipt="${15}"',
+    'message_file="${16}"',
+    'commit_oid="${17}"',
+    'shift 17',
+    'lk="$(wrap_lock "vault-$vault" 60)" || exit 70',
+    'trap \'wrap_unlock "$lk" >/dev/null 2>&1 || true\' EXIT HUP INT TERM',
+    'node "$drainer" --verify-legacy-progress "$progress" --placement-journal "$placement" --dispositions "$dispositions" --legacy-state-root "$state_root" --legacy-run-id "$run_id" --legacy-token "$token" | node --input-type=module -e \'const fs=await import("node:fs"); const m=await import(process.argv[2]); m.persistLegacyPhaseReceipt(process.argv[3], fs.readFileSync(0,"utf8"), "verify", Number(process.argv[4]));\' stack-legacy "$wrapper" "$verify_receipt" "$expected" || exit 71',
+    'node --input-type=module -e \'const m=await import(process.argv[2]); m.verifyLegacyTransactionSpec(process.argv[3],process.argv[4],process.argv[5],Number(process.argv[6]),process.argv[7],process.argv[8]);\' stack-legacy "$wrapper" "$spec" "$vault" "$scanner" "$quiescence" "$run_id" "$token" || exit 71',
+    'git -C "$vault" add -- "$@" || exit 72',
+    'git -C "$vault" commit --only -F "$message_file" -- "$@" || exit 72',
+    'oid="$(git -C "$vault" rev-parse HEAD)" || exit 73',
+    'printf "%s\\n" "$oid" | node --input-type=module -e \'const fs=await import("node:fs"); const m=await import(process.argv[2]); m.persistLegacyCommitReceipt(process.argv[3], fs.readFileSync(0,"utf8"));\' stack-legacy "$wrapper" "$commit_oid" || exit 73',
+  ].join('\n');
+  return run('/bin/bash', [
+    '-c', script, '_', lib, marker.vaultPath, wrapper, marker.drainerPath,
+    marker.progressPath, marker.placementJournalPath, marker.dispositionsPath,
+    marker.stateRoot, marker.runId, marker.token, transaction.specPath, scanner,
+    String(marker.tuning.quiescenceMinutes), String(transaction.paths.length),
+    transaction.verifyReceipt, transaction.messageFile, transaction.commitOid,
+    ...transaction.paths,
+  ], { timeoutMs, maxBuffer: 1024 * 1024 });
+}
+
+function finalizeLegacyUnderVaultLock({ marker, transaction, commit, lib, timeoutMs, wrapper }) {
+  const script = [
+    'set -u',
+    'set -o pipefail',
+    'source "$1"',
+    'vault="$2"',
+    'wrapper="$3"',
+    'drainer="$4"',
+    'progress="$5"',
+    'placement="$6"',
+    'commit="$7"',
+    'dispositions="$8"',
+    'state_root="$9"',
+    'run_id="${10}"',
+    'token="${11}"',
+    'receipt="${12}"',
+    'expected="${13}"',
+    'lk="$(wrap_lock "vault-$vault" 60)" || exit 70',
+    'trap \'wrap_unlock "$lk" >/dev/null 2>&1 || true\' EXIT HUP INT TERM',
+    'node "$drainer" --finalize-legacy-progress "$progress" --placement-journal "$placement" --commit "$commit" --dispositions "$dispositions" --legacy-state-root "$state_root" --legacy-run-id "$run_id" --legacy-token "$token" | node --input-type=module -e \'const fs=await import("node:fs"); const m=await import(process.argv[2]); m.persistLegacyPhaseReceipt(process.argv[3], fs.readFileSync(0,"utf8"), "finalize", Number(process.argv[4]));\' stack-legacy "$wrapper" "$receipt" "$expected"',
+  ].join('\n');
+  return run('/bin/bash', [
+    '-c', script, '_', lib, marker.vaultPath, wrapper, marker.drainerPath,
+    marker.progressPath, marker.placementJournalPath, commit, marker.dispositionsPath,
+    marker.stateRoot, marker.runId, marker.token, transaction.finalizeReceipt,
+    String(transaction.paths.length),
+  ], { timeoutMs, maxBuffer: 64 * 1024 });
+}
+
+function abortLegacyUnderVaultLock({ marker, transaction, lib, timeoutMs, wrapper }) {
+  const script = [
+    'set -u',
+    'set -o pipefail',
+    'source "$1"',
+    'vault="$2"',
+    'wrapper="$3"',
+    'spec="$4"',
+    'manifest="$5"',
+    'progress="$6"',
+    'placement="$7"',
+    'run_id="$8"',
+    'token="$9"',
+    'drainer="${10}"',
+    'dispositions="${11}"',
+    'state_root="${12}"',
+    'receipt="${13}"',
+    'expected="${14}"',
+    'lk="$(wrap_lock "vault-$vault" 60)" || exit 70',
+    'trap \'wrap_unlock "$lk" >/dev/null 2>&1 || true\' EXIT HUP INT TERM',
+    'node --input-type=module -e \'const m=await import(process.argv[2]); m.quarantineLegacyRecords({specPath:process.argv[3],manifestPath:process.argv[4],progressPath:process.argv[5],placementJournalPath:process.argv[6],vault:process.argv[7],runId:process.argv[8],token:process.argv[9]});\' stack-legacy "$wrapper" "$spec" "$manifest" "$progress" "$placement" "$vault" "$run_id" "$token" || exit 71',
+    'node "$drainer" --abort-legacy-progress "$progress" --placement-journal "$placement" --recovery-manifest "$manifest" --dispositions "$dispositions" --legacy-state-root "$state_root" --legacy-run-id "$run_id" --legacy-token "$token" | node --input-type=module -e \'const fs=await import("node:fs"); const m=await import(process.argv[2]); m.persistLegacyPhaseReceipt(process.argv[3], fs.readFileSync(0,"utf8"), "abort", Number(process.argv[4]));\' stack-legacy "$wrapper" "$receipt" "$expected"',
+  ].join('\n');
+  return run('/bin/bash', [
+    '-c', script, '_', lib, marker.vaultPath, wrapper, transaction.specPath,
+    transaction.recoveryManifest, marker.progressPath, marker.placementJournalPath,
+    marker.runId, marker.token, marker.drainerPath, marker.dispositionsPath,
+    marker.stateRoot, transaction.abortReceipt, String(transaction.paths.length),
+  ], { timeoutMs, maxBuffer: 64 * 1024 });
+}
+
 function commitExact({
   vault,
   lib,
@@ -1767,14 +2716,54 @@ async function main() {
   const logFile = join(logDir, 'stray-drain.log');
   if (!existsSync(drainer) || !lstatSync(drainer).isFile()) throw new Error(`drainer missing at ${drainer}`);
   if (parsedArgs.mode === 'legacy') {
-    const child = run(process.execPath, [drainer, '--adopt-legacy-list', ledger], {
+    const legacyRoot = join(config.logDir, '..', 'stray-drain-legacy');
+    ensureOrCreatePrivateDirectory(legacyRoot, 'legacy run root');
+    const resumedLegacy = resumeLegacyTransactions({
+      legacyRoot,
       timeoutMs: bounds.globalDeadlineMs,
-      env: process.env,
+      lib,
+      scanner,
+      wrapper: fileURLToPath(import.meta.url),
     });
-    if (child.code !== 0) {
-      throw new Error(`legacy reconciliation failed: ${child.failureReason ?? `exit_${child.code}`}`);
+    if (resumedLegacy.some((row) => row.status === 'owner_active')) {
+      throw new Error('an active legacy transaction owns the lane');
     }
-    process.stdout.write('legacy reconciliation completed\n');
+    const headResult = run('git', ['rev-parse', 'HEAD'], { cwd: vault });
+    const vaultHead = headResult.stdout.trim();
+    if (headResult.code !== 0 || !/^[a-f0-9]{40,64}$/.test(vaultHead)) {
+      throw new Error('legacy vault HEAD query failed');
+    }
+    const stateRoot = process.env.WRAP_LEGACY_STATE_ROOT
+      || join(dirname(dispositions), 'legacy-adoption-state');
+    const tuning = {
+      maxPerRun: bounds.maxPerRun,
+      concurrency: bounds.concurrency,
+      subscriptionConcurrency: bounds.subscriptionConcurrency,
+      quiescenceMinutes: bounds.quiescenceMinutes,
+      perProviderTimeoutMs: bounds.perProviderTimeoutMs,
+      perTranscriptDeadlineMs: bounds.perTranscriptDeadlineMs,
+      maxAttemptsPerProvider: bounds.maxAttemptsPerProvider,
+      maxSourceBytes: bounds.maxSourceBytes,
+      chunkChars: bounds.chunkChars,
+      maxChunksPerTranscript: bounds.maxChunksPerTranscript,
+    };
+    const created = createLegacyRunArtifacts(legacyRoot, {
+      stateRoot,
+      ledgerPath: ledger,
+      dispositionsPath: dispositions,
+      drainerPath: drainer,
+      vaultPath: vault,
+      vaultHead,
+      tuning,
+    });
+    const result = processLegacyRun({
+      runDirectory: created.runDirectory,
+      timeoutMs: bounds.globalDeadlineMs,
+      lib,
+      scanner,
+      wrapper: fileURLToPath(import.meta.url),
+    });
+    process.stdout.write(`legacy reconciliation completed: ${result.records} record(s)\n`);
     return;
   }
   const selfIds = new Set([
@@ -1975,9 +2964,12 @@ function assertSamePaths(actual, expected) {
 if (directInvocation()) {
   main().catch((error) => {
     const targeted = process.argv.slice(2).includes('--ids-file');
+    const legacy = process.argv.includes('--reconcile-legacy');
     process.stderr.write(targeted
       ? 'stray-drain: targeted drain failed\n'
-      : `stray-drain: ${error.message}\n`);
+      : legacy
+        ? 'stray-drain: legacy reconciliation failed\n'
+        : `stray-drain: ${error.message}\n`);
     process.exitCode = 1;
   });
 }
