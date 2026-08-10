@@ -448,7 +448,8 @@ function readPrivateStable(path, label, maxBytes = 16 * 1024 * 1024) {
   let before;
   try { before = lstatSync(path); }
   catch { throw new Error(`${label} is unavailable`); }
-  if (!before.isFile() || before.isSymbolicLink() || (before.mode & 0o777) !== 0o600
+  if (!before.isFile() || before.isSymbolicLink() || (before.mode & 0o7777) !== 0o600
+      || before.nlink !== 1
       || before.size > maxBytes) {
     throw new Error(`${label} is not an exact private regular file`);
   }
@@ -495,7 +496,7 @@ const hashPrivateStable = (path, label, maxBytes) => createHash('sha256')
 
 function ensurePrivateDirectory(path, label) {
   const stat = lstatSync(path);
-  if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o777) !== 0o700) {
+  if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o7777) !== 0o700) {
     throw new Error(`${label} directory is not private`);
   }
   return path;
@@ -805,12 +806,27 @@ function processLegacyRun({ runDirectory, timeoutMs, lib, scanner, wrapper }) {
     const current = run('git', ['rev-parse', 'HEAD'], { cwd: marker.vaultPath });
     if (current.code !== 0) throw new Error('legacy vault HEAD recovery query failed');
     if (current.stdout.trim() !== marker.vaultHead) {
-      parseLegacyPhaseReceipt(
-        readPrivateStableText(transaction.verifyReceipt, 'legacy verify receipt'),
-        'verify', evidence.mined.length,
-      );
-      commit = derivePendingCommit(marker.vaultPath, marker.vaultHead, evidence.mined);
-      persistLegacyCommitReceipt(transaction.commitOid, `${commit}\n`);
+      try {
+        parseLegacyPhaseReceipt(
+          readPrivateStableText(transaction.verifyReceipt, 'legacy verify receipt'),
+          'verify', evidence.mined.length,
+        );
+        commit = derivePendingCommit(marker.vaultPath, marker.vaultHead, evidence.mined);
+        persistLegacyCommitReceipt(transaction.commitOid, `${commit}\n`);
+      } catch {
+        const aborted = abortLegacyUnderVaultLock({
+          marker, transaction, lib, timeoutMs, wrapper,
+        });
+        if (aborted.code !== 0) throw new Error('legacy head-advance abort failed');
+        parseLegacyPhaseReceipt(
+          readPrivateStableText(transaction.abortReceipt, 'legacy abort receipt'),
+          'abort', evidence.mined.length,
+        );
+        writeLegacyResolution(runDirectory, marker, {
+          status: 'aborted', records: evidence.mined.length,
+        });
+        throw new Error('legacy exact-path adoption aborted after vault head advance');
+      }
     } else {
       const committed = commitLegacyExact({
         marker, transaction, lib, scanner, timeoutMs, wrapper,
@@ -1031,6 +1047,24 @@ function exactObjectKeys(value, keys) {
     && isDeepStrictEqual(Object.keys(value).sort(), [...keys].sort());
 }
 
+function parseLegacyProgressRow(row) {
+  if (row?.status !== 'legacy_source_missing') {
+    return parseProgress(`${JSON.stringify(row)}\n`, null, LEGACY_PROGRESS_STATUSES)[0];
+  }
+  const observedAt = Date.parse(row.observedAt);
+  if (!exactObjectKeys(row, [
+    'censusSha256', 'legacyLedgerSha256', 'observedAt', 'runId', 'sourcePath', 'status',
+    'transcriptId',
+  ]) || row.sourcePath !== null || !REQUESTED_ID_PATTERN.test(row.transcriptId)
+      || !UUID_PATTERN.test(row.runId) || !Number.isFinite(observedAt)
+      || new Date(observedAt).toISOString() !== row.observedAt
+      || !/^[a-f0-9]{64}$/.test(row.legacyLedgerSha256)
+      || !/^[a-f0-9]{64}$/.test(row.censusSha256)) {
+    throw new Error('invalid legacy source-missing progress row');
+  }
+  return row;
+}
+
 export function reconcileLegacyEvidence({ progressRaw, placementRaw, receipt, runId, token }) {
   const invalid = () => new Error('invalid legacy evidence');
   try {
@@ -1051,12 +1085,11 @@ export function reconcileLegacyEvidence({ progressRaw, placementRaw, receipt, ru
     if (!exactObjectKeys(progressMarker, ['legacyProgressVersion', 'event', 'runId', 'token'])
         || progressMarker.legacyProgressVersion !== 1 || progressMarker.event !== 'marker'
         || progressMarker.runId !== runId || progressMarker.token !== token) throw invalid();
-    const rows = progressValues.map((row) => parseProgress(
-      `${JSON.stringify(row)}\n`, null, LEGACY_PROGRESS_STATUSES,
-    )[0]);
+    const rows = progressValues.map(parseLegacyProgressRow);
     if (rows.some((row) => row.runId !== runId
         || !REQUESTED_ID_PATTERN.test(row.transcriptId)
-        || !isAbsolute(row.sourcePath) || hasControlCharacter(row.sourcePath)
+        || (row.status !== 'legacy_source_missing'
+          && (!isAbsolute(row.sourcePath) || hasControlCharacter(row.sourcePath)))
         || (Object.hasOwn(row, 'recordPath') && hasControlCharacter(row.recordPath)))
         || rows.length !== checkedReceipt.selected) throw invalid();
     const counts = {};
@@ -1401,6 +1434,52 @@ export function scanExactRecords({ scanner, paths, execute = run }) {
   }
 }
 
+function readExactStagedBlob({ vault, recordRelative, recordSha256, execute }) {
+  const staged = execute('git', ['ls-files', '-s', '--', recordRelative], { cwd: vault });
+  const lines = staged.stdout.split('\n').filter(Boolean);
+  if (staged.code !== 0 || lines.length !== 1) {
+    throw new Error('staged record index proof is invalid');
+  }
+  const match = /^100644 ([a-f0-9]{40,64}) 0\t(.+)$/.exec(lines[0]);
+  if (!match || match[2] !== recordRelative) {
+    throw new Error('staged record index proof is invalid');
+  }
+  const object = execute('git', ['cat-file', 'blob', match[1]], { cwd: vault });
+  if (object.code !== 0) throw new Error('staged record blob is unavailable');
+  const body = Buffer.from(object.stdout, 'utf8');
+  if (createHash('sha256').update(body).digest('hex') !== recordSha256) {
+    throw new Error('staged record hash mismatches frozen evidence');
+  }
+  return { oid: match[1], body };
+}
+
+function scanImmutableStagedBlob({ scanner, staged, temporaryRoot, execute }) {
+  const temporary = join(temporaryRoot, `.staged-record-${randomUUID()}.tmp`);
+  writeNewPrivateDurable(temporary, staged.body);
+  try {
+    scanExactRecords({ scanner, paths: [temporary], execute });
+  } finally {
+    try { unlinkSync(temporary); } catch { /* failed scanner result remains authoritative */ }
+  }
+}
+
+function verifyStagedRecordBlobs({ vault, scanner, records, temporaryRoot, execute = run }) {
+  const staged = records.map((row) => ({
+    row,
+    staged: readExactStagedBlob({ vault, ...row, execute }),
+  }));
+  for (const item of staged) {
+    scanImmutableStagedBlob({ scanner, staged: item.staged, temporaryRoot, execute });
+  }
+  for (const item of staged) {
+    const current = readExactStagedBlob({ vault, ...item.row, execute });
+    if (current.oid !== item.staged.oid) {
+      throw new Error('staged record index changed after credential scan');
+    }
+  }
+  return staged.length;
+}
+
 export function finalizeCaptured({
   drainer,
   progress,
@@ -1429,11 +1508,8 @@ export function finalizeCaptured({
 }
 
 export function verifyCapturedDispositions(dispositions, minedRows, commit) {
-  const stat = lstatSync(dispositions);
-  if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0) {
-    throw new Error('disposition ledger is not a private regular file');
-  }
-  const rows = readFileSync(dispositions, 'utf8').split('\n').filter(Boolean).map((line, index) => {
+  privateRegular(dispositions, 'disposition ledger');
+  const rows = readPrivateStableText(dispositions, 'disposition ledger').split('\n').filter(Boolean).map((line, index) => {
     try { return JSON.parse(line); }
     catch { throw new Error(`malformed disposition row ${index + 1}`); }
   });
@@ -1458,8 +1534,9 @@ export function verifyCapturedDispositions(dispositions, minedRows, commit) {
 
 function privateRegular(path, label) {
   const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0) {
-    throw new Error(`${label} is not a private regular file`);
+  if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o7777) !== 0o600
+      || stat.nlink !== 1) {
+    throw new Error(`${label} is not an exact private regular file`);
   }
   return stat;
 }
@@ -2095,8 +2172,9 @@ export function validateMinedRows(rows, vault, execute = run) {
       throw new Error(`record path contains a symlink for ${row.transcriptId}`);
     }
     const stat = lstatSync(path);
-    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`record is not a regular file for ${row.transcriptId}`);
-    if ((stat.mode & 0o077) !== 0) throw new Error(`record permissions are not private for ${row.transcriptId}`);
+    if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o7777) !== 0o600 || stat.nlink !== 1) {
+      throw new Error(`record is not an exact private regular file for ${row.transcriptId}`);
+    }
     if (sha256(path) !== row.recordSha256) throw new Error(`record hash mismatch for ${row.transcriptId}`);
     const tracked = execute('git', ['cat-file', '-e', `HEAD:${recordRelative}`], { cwd: root });
     if (tracked.code === 0) throw new Error(`record path already exists in HEAD for ${row.transcriptId}`);
@@ -2170,16 +2248,25 @@ function readLegacyTransactionSpec(specPath, vault, expectedRunId, expectedToken
   catch { throw new Error('legacy transaction specification is malformed'); }
   const keys = [
     'beforeHead', 'event', 'legacyTransactionVersion', 'quarantineRoot',
-    'rows', 'runId', 'token',
+    'messagePath', 'messageSha256', 'rows', 'runId', 'token',
   ];
   if (!exactObjectKeys(spec, keys) || spec.legacyTransactionVersion !== 1
       || spec.event !== 'legacy_transaction' || spec.runId !== expectedRunId
       || spec.token !== expectedToken || !/^[a-f0-9]{40,64}$/.test(spec.beforeHead)
+      || !/^[a-f0-9]{64}$/.test(spec.messageSha256)
       || !Array.isArray(spec.rows) || !spec.rows.length
       || typeof spec.quarantineRoot !== 'string' || !isAbsolute(spec.quarantineRoot)) {
     throw new Error('legacy transaction specification is invalid');
   }
   const runDirectory = dirname(specPath);
+  const expectedMessagePath = join(runDirectory, 'legacy-commit-message.txt');
+  const expectedMessage = legacyCommitMessage(runDirectory, spec.rows.length);
+  if (spec.messagePath !== expectedMessagePath
+      || hashPrivateStable(spec.messagePath, 'legacy transaction commit message') !== spec.messageSha256
+      || readPrivateStableText(spec.messagePath, 'legacy transaction commit message') !== expectedMessage
+      || spec.messageSha256 !== createHash('sha256').update(expectedMessage).digest('hex')) {
+    throw new Error('legacy transaction commit message proof is invalid');
+  }
   if (!contained(resolve(spec.quarantineRoot), resolve(runDirectory))) {
     throw new Error('legacy transaction quarantine escaped its run');
   }
@@ -2202,6 +2289,21 @@ function readLegacyTransactionSpec(specPath, vault, expectedRunId, expectedToken
     seen.add(item.recordRelative);
   }
   return spec;
+}
+
+function legacyCommitMessage(runDirectory, count) {
+  return `vault: adopt ${count} legacy transcript record(s)\n\n`
+    + `Explicit legacy adoption ${basename(runDirectory)}. Raw transcripts and legacy claims were retained.\n`;
+}
+
+export function readLegacyTransactionCommitMessage(specPath, vault, runId, token) {
+  const spec = readLegacyTransactionSpec(specPath, vault, runId, token);
+  const message = readPrivateStableText(spec.messagePath, 'legacy transaction commit message');
+  if (createHash('sha256').update(message).digest('hex') !== spec.messageSha256
+      || message !== legacyCommitMessage(dirname(specPath), spec.rows.length)) {
+    throw new Error('legacy transaction commit message proof is invalid');
+  }
+  return message;
 }
 
 export function materializeLegacyTransaction({
@@ -2244,6 +2346,8 @@ export function materializeLegacyTransaction({
   if (!paths.length || mined.some((row) => row.runId !== runId)) {
     throw new Error('cannot materialize legacy transaction without exact mined evidence');
   }
+  const messageBody = legacyCommitMessage(runDirectory, paths.length);
+  writeLegacyPrivateAtomicIfAbsent(messageFile, messageBody, 'legacy transaction commit message');
   writeLegacyPrivateAtomicIfAbsent(specPath, `${JSON.stringify({
     legacyTransactionVersion: 1,
     event: 'legacy_transaction',
@@ -2251,14 +2355,10 @@ export function materializeLegacyTransaction({
     token,
     beforeHead,
     quarantineRoot,
+    messagePath: messageFile,
+    messageSha256: createHash('sha256').update(messageBody).digest('hex'),
     rows: mined.map((row, index) => ({ progress: row, recordRelative: paths[index] })),
   })}\n`, 'legacy transaction specification');
-  writeLegacyPrivateAtomicIfAbsent(
-    messageFile,
-    `vault: adopt ${paths.length} legacy transcript record(s)\n\n`
-      + `Explicit legacy adoption ${basename(runDirectory)}. Raw transcripts and legacy claims were retained.\n`,
-    'legacy transaction commit message',
-  );
   readLegacyTransactionSpec(specPath, vault, runId, token);
   return {
     specPath,
@@ -2289,10 +2389,18 @@ export function quarantineLegacyRecords({
   const placementBody = readPrivateStable(placementJournalPath, 'legacy placement journal');
   const spec = readLegacyTransactionSpec(specPath, vault, runId, token);
   ensureOrCreatePrivateDirectory(spec.quarantineRoot, 'legacy quarantine');
+  const root = realpathSync(vault);
   const entries = [];
   for (const [index, item] of spec.rows.entries()) {
     const row = item.progress;
-    const cleared = execute('git', ['update-index', '--force-remove', '--', item.recordRelative], { cwd: vault });
+    const tracked = execute('git', ['cat-file', '-e', `HEAD:${item.recordRelative}`], { cwd: root });
+    if (tracked.code === 0) throw new Error('legacy quarantine refused a now-tracked record');
+    if (![1, 128].includes(tracked.code)) throw new Error('legacy quarantine history check failed');
+    const untracked = execute('git', ['ls-files', '--others', '--exclude-standard', '--', item.recordRelative], { cwd: root });
+    if (untracked.code !== 0 || untracked.stdout.trim() !== item.recordRelative) {
+      throw new Error('legacy quarantine record ownership changed');
+    }
+    const cleared = execute('git', ['update-index', '--force-remove', item.recordRelative], { cwd: vault });
     if (cleared.code !== 0) throw new Error('legacy quarantine could not clear an exact index path');
     const recoveryPath = join(spec.quarantineRoot, `${String(index).padStart(3, '0')}-${row.recordSha256}.md`);
     if (!contained(resolve(recoveryPath), resolve(spec.quarantineRoot))) {
@@ -2397,6 +2505,27 @@ export function verifyLegacyTransactionSpec(
   return spec.rows.length;
 }
 
+export function verifyLegacyStagedTransaction(
+  specPath,
+  vault,
+  scanner,
+  runId,
+  token,
+  execute = run,
+) {
+  const spec = readLegacyTransactionSpec(specPath, vault, runId, token);
+  return verifyStagedRecordBlobs({
+    vault,
+    scanner,
+    temporaryRoot: dirname(specPath),
+    records: spec.rows.map((item) => ({
+      recordRelative: item.recordRelative,
+      recordSha256: item.progress.recordSha256,
+    })),
+    execute,
+  });
+}
+
 function commitLegacyExact({
   marker,
   transaction,
@@ -2423,16 +2552,27 @@ function commitLegacyExact({
     'quiescence="${13}"',
     'expected="${14}"',
     'verify_receipt="${15}"',
-    'message_file="${16}"',
-    'commit_oid="${17}"',
-    'shift 17',
+    'commit_oid="${16}"',
+    'shift 16',
     'lk="$(wrap_lock "vault-$vault" 60)" || exit 70',
-    'trap \'wrap_unlock "$lk" >/dev/null 2>&1 || true\' EXIT HUP INT TERM',
+    'index="$(mktemp "$vault/.legacy-adoption-index.XXXXXX")" || exit 72',
+    'rm -f "$index" || exit 72',
+    'cleanup() { code=$?; rm -f "$index"; wrap_unlock "$lk" >/dev/null 2>&1 || true; trap - EXIT; exit "$code"; }',
+    'trap cleanup EXIT HUP INT TERM',
+    'export GIT_INDEX_FILE="$index"',
     'node "$drainer" --verify-legacy-progress "$progress" --placement-journal "$placement" --dispositions "$dispositions" --legacy-state-root "$state_root" --legacy-run-id "$run_id" --legacy-token "$token" | node --input-type=module -e \'const fs=await import("node:fs"); const m=await import(process.argv[2]); m.persistLegacyPhaseReceipt(process.argv[3], fs.readFileSync(0,"utf8"), "verify", Number(process.argv[4]));\' stack-legacy "$wrapper" "$verify_receipt" "$expected" || exit 71',
     'node --input-type=module -e \'const m=await import(process.argv[2]); m.verifyLegacyTransactionSpec(process.argv[3],process.argv[4],process.argv[5],Number(process.argv[6]),process.argv[7],process.argv[8]);\' stack-legacy "$wrapper" "$spec" "$vault" "$scanner" "$quiescence" "$run_id" "$token" || exit 71',
+    'git -C "$vault" read-tree HEAD || exit 72',
     'git -C "$vault" add -- "$@" || exit 72',
-    'git -C "$vault" commit --only -F "$message_file" -- "$@" || exit 72',
+    'node --input-type=module -e \'const m=await import(process.argv[2]); m.verifyLegacyStagedTransaction(process.argv[3],process.argv[4],process.argv[5],process.argv[6],process.argv[7]);\' stack-legacy "$wrapper" "$spec" "$vault" "$scanner" "$run_id" "$token" || exit 72',
+    'pre_hook="$(git -C "$vault" rev-parse --git-path hooks/pre-commit)" || exit 72',
+    'case "$pre_hook" in /*) ;; *) pre_hook="$vault/$pre_hook";; esac',
+    '[ ! -e "$pre_hook" ] || git -C "$vault" hook run pre-commit || exit 72',
+    'node --input-type=module -e \'const m=await import(process.argv[2]); m.verifyLegacyStagedTransaction(process.argv[3],process.argv[4],process.argv[5],process.argv[6],process.argv[7]);\' stack-legacy "$wrapper" "$spec" "$vault" "$scanner" "$run_id" "$token" || exit 72',
+    'node --input-type=module -e \'const m=await import(process.argv[2]); process.stdout.write(m.readLegacyTransactionCommitMessage(process.argv[3],process.argv[4],process.argv[5],process.argv[6]));\' stack-legacy "$wrapper" "$spec" "$vault" "$run_id" "$token" | git -C "$vault" commit --no-verify -F - || exit 72',
     'oid="$(git -C "$vault" rev-parse HEAD)" || exit 73',
+    'unset GIT_INDEX_FILE',
+    'git -C "$vault" reset --quiet HEAD -- "$@" || exit 73',
     'printf "%s\\n" "$oid" | node --input-type=module -e \'const fs=await import("node:fs"); const m=await import(process.argv[2]); m.persistLegacyCommitReceipt(process.argv[3], fs.readFileSync(0,"utf8"));\' stack-legacy "$wrapper" "$commit_oid" || exit 73',
   ].join('\n');
   return run('/bin/bash', [
@@ -2440,7 +2580,7 @@ function commitLegacyExact({
     marker.progressPath, marker.placementJournalPath, marker.dispositionsPath,
     marker.stateRoot, marker.runId, marker.token, transaction.specPath, scanner,
     String(marker.tuning.quiescenceMinutes), String(transaction.paths.length),
-    transaction.verifyReceipt, transaction.messageFile, transaction.commitOid,
+    transaction.verifyReceipt, transaction.commitOid,
     ...transaction.paths,
   ], { timeoutMs, maxBuffer: 1024 * 1024 });
 }
@@ -2537,18 +2677,31 @@ function commitExact({
     'quiescence="${12}"',
     'shift 12',
     'lk="$(wrap_lock "vault-$vault" 60)" || exit 70',
-    'trap \'wrap_unlock "$lk" >/dev/null 2>&1 || true\' EXIT HUP INT TERM',
+    'index="$(mktemp "$vault/.stray-drain-index.XXXXXX")" || exit 72',
+    'rm -f "$index" || exit 72',
+    'cleanup() { code=$?; rm -f "$index"; wrap_unlock "$lk" >/dev/null 2>&1 || true; trap - EXIT; exit "$code"; }',
+    'trap cleanup EXIT HUP INT TERM',
+    'export GIT_INDEX_FILE="$index"',
     'failure=""',
     'node "$drainer" --verify-progress "$progress" --dispositions "$dispositions" || failure="verify"',
     'node --input-type=module -e \'const m=await import(process.argv[2]); m.verifyTransactionSpec(process.argv[3], process.argv[4], process.argv[5], Number(process.argv[6]));\' stack-stray-library "$wrapper" "$spec" "$vault" "$scanner" "$quiescence" || failure="verify"',
+    '[ -n "$failure" ] || git -C "$vault" read-tree HEAD || failure="add"',
     '[ -n "$failure" ] || git -C "$vault" add -- "$@" || failure="add"',
-    '[ -n "$failure" ] || git -C "$vault" commit --only -F "$msg" -- "$@" || failure="commit"',
+    '[ -n "$failure" ] || node --input-type=module -e \'const m=await import(process.argv[2]); m.verifyStagedTransaction(process.argv[3], process.argv[4], process.argv[5]);\' stack-stray-library "$wrapper" "$spec" "$vault" "$scanner" || failure="verify"',
+    'pre_hook="$(git -C "$vault" rev-parse --git-path hooks/pre-commit)" || failure="commit"',
+    'case "$pre_hook" in /*) ;; *) pre_hook="$vault/$pre_hook";; esac',
+    '[ -n "$failure" ] || { [ ! -e "$pre_hook" ] || git -C "$vault" hook run pre-commit; } || failure="commit"',
+    '[ -n "$failure" ] || node --input-type=module -e \'const m=await import(process.argv[2]); m.verifyStagedTransaction(process.argv[3], process.argv[4], process.argv[5]);\' stack-stray-library "$wrapper" "$spec" "$vault" "$scanner" || failure="verify"',
+    '[ -n "$failure" ] || git -C "$vault" commit --no-verify -F "$msg" || failure="commit"',
     'if [ -n "$failure" ]; then',
+    '  unset GIT_INDEX_FILE',
     '  node --input-type=module -e \'const m=await import(process.argv[2]); await m.rollbackPlacedRecords(process.argv[3], process.argv[4], process.argv[5]);\' stack-stray-library "$wrapper" "$spec" "$recovery" "$vault" || exit 73',
     '  node "$drainer" --rollback-progress "$progress" --recovery-manifest "$recovery" --dispositions "$dispositions" || exit 74',
     '  exit 72',
     'fi',
     'oid="$(git -C "$vault" rev-parse HEAD)" || exit 75',
+    'unset GIT_INDEX_FILE',
+    'git -C "$vault" reset --quiet HEAD -- "$@" || exit 75',
     'umask 077',
     '(set -C; printf "%s\\n" "$oid" > "$commit_oid") || exit 75',
     'chmod 600 "$commit_oid" || exit 75',
@@ -2562,11 +2715,8 @@ function commitExact({
 }
 
 export async function rollbackPlacedRecords(specPath, recoveryManifest, vault) {
-  const specStat = lstatSync(specPath);
-  if (!specStat.isFile() || specStat.isSymbolicLink() || (specStat.mode & 0o077) !== 0) {
-    throw new Error('rollback specification is not a private regular file');
-  }
-  const spec = JSON.parse(readFileSync(specPath, 'utf8'));
+  privateRegular(specPath, 'rollback specification');
+  const spec = JSON.parse(readPrivateStableText(specPath, 'rollback specification'));
   if (!spec || !Array.isArray(spec.rows) || !spec.quarantineRoot) throw new Error('invalid rollback specification');
   const root = realpathSync(vault);
   mkdirSync(spec.quarantineRoot, { recursive: true, mode: 0o700 });
@@ -2586,7 +2736,7 @@ export async function rollbackPlacedRecords(specPath, recoveryManifest, vault) {
     const tracked = run('git', ['cat-file', '-e', `HEAD:${row.recordRelative}`], { cwd: root });
     if (tracked.code === 0) throw new Error(`rollback refused record already tracked in HEAD ${row.recordRelative}`);
     if (![1, 128].includes(tracked.code)) throw new Error(`rollback history check failed for ${row.recordRelative}`);
-    const unstaged = run('git', ['update-index', '--force-remove', '--', row.recordRelative], { cwd: root });
+    const unstaged = run('git', ['update-index', '--force-remove', row.recordRelative], { cwd: root });
     if (unstaged.code !== 0) throw new Error(`rollback could not clear index for ${row.recordRelative}`);
     const destination = join(spec.quarantineRoot, row.recordRelative);
     if (!contained(resolve(destination), resolve(spec.quarantineRoot))) {
@@ -2621,11 +2771,8 @@ export async function rollbackPlacedRecords(specPath, recoveryManifest, vault) {
 }
 
 export function verifyTransactionSpec(specPath, vault, scanner, quiescenceMinutes, execute = run) {
-  const specStat = lstatSync(specPath);
-  if (!specStat.isFile() || specStat.isSymbolicLink() || (specStat.mode & 0o077) !== 0) {
-    throw new Error('transaction specification is not a private regular file');
-  }
-  const spec = JSON.parse(readFileSync(specPath, 'utf8'));
+  privateRegular(specPath, 'transaction specification');
+  const spec = JSON.parse(readPrivateStableText(specPath, 'transaction specification'));
   if (!spec || !Array.isArray(spec.rows)) throw new Error('invalid transaction specification');
   const root = realpathSync(vault);
   const cutoff = Date.now() - quiescenceMinutes * 60_000;
@@ -2648,7 +2795,8 @@ export function verifyTransactionSpec(specPath, vault, scanner, quiescenceMinute
     const recordPath = realpathSync(row.recordPath);
     if (!contained(recordPath, root)) throw new Error(`record escaped vault for ${row.transcriptId}`);
     const recordStat = lstatSync(recordPath);
-    if (!recordStat.isFile() || recordStat.isSymbolicLink() || (recordStat.mode & 0o077) !== 0
+    if (!recordStat.isFile() || recordStat.isSymbolicLink() || (recordStat.mode & 0o7777) !== 0o600
+        || recordStat.nlink !== 1
         || sha256(recordPath) !== row.recordSha256) {
       throw new Error(`record proof changed for ${row.transcriptId}`);
     }
@@ -2661,6 +2809,33 @@ export function verifyTransactionSpec(specPath, vault, scanner, quiescenceMinute
     recordPaths.push(recordPath);
   }
   scanExactRecords({ scanner, paths: recordPaths, execute });
+}
+
+export function verifyStagedTransaction(specPath, vault, scanner, execute = run) {
+  let spec;
+  try { spec = JSON.parse(readPrivateStableText(specPath, 'transaction specification')); }
+  catch { throw new Error('transaction specification is malformed'); }
+  if (!spec || !Array.isArray(spec.rows) || !spec.rows.length) {
+    throw new Error('invalid transaction specification');
+  }
+  const records = spec.rows.map((row) => {
+    if (!row || typeof row.recordRelative !== 'string'
+        || !/^project-memory\/[^/]+\/sessions\/[^/]+\.md$/.test(row.recordRelative)
+        || !/^[a-f0-9]{64}$/.test(row.recordSha256)) {
+      throw new Error('invalid staged transaction record');
+    }
+    return { recordRelative: row.recordRelative, recordSha256: row.recordSha256 };
+  });
+  if (new Set(records.map((row) => row.recordRelative)).size !== records.length) {
+    throw new Error('duplicate staged transaction record');
+  }
+  return verifyStagedRecordBlobs({
+    vault,
+    scanner,
+    temporaryRoot: dirname(specPath),
+    records,
+    execute,
+  });
 }
 
 function logLine(path, message) {
