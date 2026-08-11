@@ -238,7 +238,7 @@ export function readRequestedIds(path, {
   let failed = false;
   try {
     const before = fileOps.lstatSync(path, { bigint: true });
-    if (!before.isFile() || before.isSymbolicLink() || !privateMode(before)
+    if (!before.isFile() || before.isSymbolicLink() || !privateMode(before) || before.nlink !== 1n
         || before.size < 1n || before.size > BigInt(maxBytes)) throw invalid();
     fd = fileOps.openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     const opened = fileOps.fstatSync(fd, { bigint: true });
@@ -2601,6 +2601,7 @@ function commitLegacyExact({
     'tree="$(node --input-type=module -e \'const m=await import(process.argv[2]); process.stdout.write(m.prepareLegacyCommitTree(process.argv[3],process.argv[4],process.argv[5],process.argv[6],process.argv[7]));\' stack-legacy "$wrapper" "$spec" "$vault" "$scanner" "$run_id" "$token")" || exit 72',
     'oid="$(node --input-type=module -e \'const m=await import(process.argv[2]); process.stdout.write(m.readLegacyTransactionCommitMessage(process.argv[3],process.argv[4],process.argv[5],process.argv[6]));\' stack-legacy "$wrapper" "$spec" "$vault" "$run_id" "$token" | git -C "$vault" commit-tree "$tree" -p "$base")" || exit 72',
     'git -C "$vault" update-ref HEAD "$oid" "$base" || exit 73',
+    'GIT_EDITOR=: GIT_SEQUENCE_EDITOR=: GIT_TERMINAL_PROMPT=0 git -C "$vault" hook run --ignore-missing post-commit || true',
     'unset GIT_INDEX_FILE',
     'git -C "$vault" reset --quiet HEAD -- "$@" || exit 73',
     'printf "%s\\n" "$oid" | node --input-type=module -e \'const fs=await import("node:fs"); const m=await import(process.argv[2]); m.persistLegacyCommitReceipt(process.argv[3], fs.readFileSync(0,"utf8"));\' stack-legacy "$wrapper" "$commit_oid" || exit 73',

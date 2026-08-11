@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, chmodSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, symlinkSync, utimesSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, linkSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync, symlinkSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -195,6 +195,12 @@ test('requested identifiers require one stable private canonical identifier per 
   const link = join(root, 'requested-link.txt');
   symlinkSync(requested, link);
   assert.throws(() => coordinator.readRequestedIds(link), /invalid requested identifiers file/i);
+
+  const hardLink = join(root, 'requested-hard-link.txt');
+  linkSync(requested, hardLink);
+  assert.equal(lstatSync(hardLink).nlink, 2);
+  assert.throws(() => coordinator.readRequestedIds(hardLink), /invalid requested identifiers file/i);
+  unlinkSync(hardLink);
 
   for (const body of [
     `${first}\n${second}`,
@@ -2619,12 +2625,16 @@ test('legacy commit-msg hook runs before an exact durable commit', () => {
     'printf hook-ran > "$HOOK_MARKER"',
     '',
   ].join('\n'), { mode: 0o700 });
+  const postCommitHookMarker = join(f.root, 'post-commit-hook-ran');
+  const postCommitHook = join(hooksPath, 'post-commit');
+  writeFileSync(postCommitHook, '#!/bin/sh\nprintf hook-ran > "$POST_COMMIT_HOOK_MARKER"\n', { mode: 0o700 });
   Object.assign(env, {
     LEGACY_CALLS: calls, LEGACY_SOURCE: sourcePath, LEGACY_ID: legacyId,
     FAKE_VAULT: vault, FAKE_LOCK_MARKER: lockMarker, WRAP_LIB: lib, WRAP_SCANNER: scanner,
     WRAP_LEGACY_STATE_ROOT: join(f.root, 'legacy-state'),
     HOOK_MARKER: hookMarker,
     PREPARE_HOOK_MARKER: prepareHookMarker,
+    POST_COMMIT_HOOK_MARKER: postCommitHookMarker,
   });
   const beforeHead = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: vault, encoding: 'utf8' }).stdout.trim();
   const result = spawnSync(process.execPath, [WRAPPER, '--reconcile-legacy'], { env, encoding: 'utf8' });
@@ -2632,6 +2642,7 @@ test('legacy commit-msg hook runs before an exact durable commit', () => {
   assert.notEqual(spawnSync('git', ['rev-parse', 'HEAD'], { cwd: vault, encoding: 'utf8' }).stdout.trim(), beforeHead);
   assert.equal(existsSync(prepareHookMarker), true);
   assert.equal(existsSync(hookMarker), true);
+  assert.equal(existsSync(postCommitHookMarker), true);
   assert.equal(existsSync(join(vault, 'project-memory', 'documents', 'sessions', 'legacy-message-hook.md')), true);
   const invocations = readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse);
   assert.deepEqual(invocations.map((args) => args[0]), [
