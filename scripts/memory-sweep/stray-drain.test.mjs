@@ -1180,6 +1180,26 @@ test('conflicting progress and placed journal proofs are never commit eligible',
   assert.equal(result.issues.some((issue) => issue.kind === 'journal_progress_conflict'), true);
 });
 
+test('mined progress without placed journal proof is never commit eligible', () => {
+  const expected = [{ id: 'placed', path: '/safe/placed.jsonl' }];
+  const mined = {
+    transcriptId: 'placed', sourcePath: expected[0].path, status: 'mined',
+    observedAt: '2026-08-09T22:00:00.000Z', runId: RUN_ID,
+    sourceSha256: 'a'.repeat(64),
+    recordPath: '/safe/vault/project-memory/documents/sessions/placed.md',
+    recordSha256: 'b'.repeat(64), ...PROVIDER_PROOF,
+  };
+  const result = reconcileRunEvidence({
+    progressRaw: `${JSON.stringify(mined)}\n`,
+    journalRaw: '',
+    expected,
+  });
+  assert.deepEqual(result.rows, []);
+  assert.deepEqual(result.blockedTranscriptIds, ['placed']);
+  assert.equal(result.missing[0].detailCode, 'evidence_conflict');
+  assert.equal(result.issues.some((issue) => issue.kind === 'missing_placement_proof'), true);
+});
+
 test('multiple conflicting placement intents block even a matching placed row', () => {
   const expected = [{ id: 'placed', path: '/safe/placed.jsonl' }];
   const intent = {

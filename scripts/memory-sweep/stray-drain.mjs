@@ -500,6 +500,11 @@ export function reconcileRunEvidence({ progressRaw, journalRaw = '', expected, s
       if (!isDeepStrictEqual(intended, prior)) block(id, 'journal_intent_progress_conflict');
     }
   }
+  for (const [id, row] of [...accepted]) {
+    if (row.status === 'mined' && !isDeepStrictEqual(journalById.get(id), row)) {
+      block(id, 'missing_placement_proof');
+    }
+  }
   const rows = [];
   const missing = [];
   const claimById = new Map();
