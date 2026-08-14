@@ -83,7 +83,12 @@ export function discoverCandidates({
   if (typeof onExcludedRoot !== 'function') throw new Error('onExcludedRoot must be a function');
 
   const root = realpathSync(projectsRoot);
-  const projectMemoryRoot = realpathSync(join(vaultRoot, 'project-memory'));
+  let projectMemoryRoot;
+  try {
+    projectMemoryRoot = realpathSync(join(vaultRoot, 'project-memory'));
+  } catch {
+    return [];
+  }
   const claimed = readLedgerStrict(ledgerPath);
   const cutoff = nowMs - quiescenceMinutes * 60_000;
   const out = [];

@@ -135,3 +135,19 @@ test('malformed ledger input fails closed', () => {
     f.cleanup();
   }
 });
+
+test('returns empty array if vault project-memory is missing', () => {
+  const f = fixture();
+  rmSync(f.projectMemoryRoot, { recursive: true, force: true });
+  try {
+    const found = discoverCandidates({
+      projectsRoot: f.projectsRoot,
+      ledgerPath: f.ledgerPath,
+      vaultRoot: f.vaultRoot,
+      quiescenceMinutes: 45,
+    });
+    assert.deepEqual(found, []);
+  } finally {
+    f.cleanup();
+  }
+});
