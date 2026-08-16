@@ -102,22 +102,33 @@ export function discoverCandidates({
       continue;
     }
 
-    for (const file of readdirSync(projectDir, { withFileTypes: true })) {
-      if (!file.isFile() || file.isSymbolicLink() || !file.name.endsWith('.jsonl')) continue;
-      const id = basename(file.name, '.jsonl');
-      if (!SAFE_IDENTIFIER.test(id) || claimed.has(id) || selfIds.has(id)) continue;
+    const dirsToSearch = [projectDir];
+    if (route.target && route.target !== projectDir) {
+      dirsToSearch.push(route.target);
+    }
 
-      const path = join(projectDir, file.name);
-      const stat = lstatSync(path);
-      if (!stat.isFile() || stat.mtimeMs > cutoff) continue;
-      let real;
-      try {
-        real = realpathSync(path);
-      } catch {
-        continue;
+    for (const searchDir of dirsToSearch) {
+      for (const file of readdirSync(searchDir, { withFileTypes: true })) {
+        if (!file.isFile() || file.isSymbolicLink() || !file.name.endsWith('.jsonl')) continue;
+        const id = basename(file.name, '.jsonl');
+        if (!SAFE_IDENTIFIER.test(id) || claimed.has(id) || selfIds.has(id)) continue;
+
+        const path = join(searchDir, file.name);
+        const stat = lstatSync(path);
+        if (!stat.isFile() || stat.mtimeMs > cutoff) continue;
+        let real;
+        try {
+          real = realpathSync(path);
+        } catch {
+          continue;
+        }
+        if (real !== path || (!contained(real, root) && !contained(real, projectMemoryRoot))) continue;
+        
+        // Prevent duplicates if same file found somehow
+        if (!out.some(o => o.path === path)) {
+          out.push({ id, path, mtimeMs: stat.mtimeMs, size: stat.size });
+        }
       }
-      if (real !== path || !contained(real, root)) continue;
-      out.push({ id, path, mtimeMs: stat.mtimeMs, size: stat.size });
     }
   }
 
