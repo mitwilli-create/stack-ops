@@ -47,7 +47,7 @@ export function createSessionHost(options = {}) {
       }
 
       const assembled = await context({ ...input, prompt });
-      const dispatched = await dispatch({ prompt, decision, context: assembled, session });
+      const dispatched = await dispatch({ prompt, input, decision, context: assembled, session });
       if (!dispatched || typeof dispatched.answer !== 'string') {
         throw new Error('dispatch returned no answer');
       }

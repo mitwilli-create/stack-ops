@@ -38,6 +38,30 @@ test('handles a prompt through the context, routing, dispatch, and history seams
   }
 });
 
+test('forwards the caller-supplied input (e.g. paths) through to dispatch', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'stack-ops-host-input-'));
+  try {
+    const store = new SessionStore(root);
+    let seenInput = null;
+    const host = createSessionHost({
+      store,
+      context: async () => ({ systemPrompt: '', sources: [], skills: [] }),
+      route: async () => ({ lane: 'toil', taskType: 'bulk_mechanical_edit', executionTask: 'bulk_mechanical_edit', selected: { handle: 'test:model' }, targets: [{ handle: 'test:model' }] }),
+      dispatch: async ({ input }) => {
+        seenInput = input;
+        return { answer: 'done' };
+      },
+      localAnswer: () => null,
+    });
+
+    await host.submit({ prompt: 'rename these files', input: { paths: ['a.txt', 'b.txt'] } });
+
+    assert.deepEqual(seenInput, { paths: ['a.txt', 'b.txt'] });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('answers local clock prompts without routing or dispatch', async () => {
   const root = await mkdtemp(join(tmpdir(), 'stack-ops-local-host-'));
   try {
