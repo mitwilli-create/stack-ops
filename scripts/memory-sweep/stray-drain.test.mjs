@@ -1650,7 +1650,17 @@ test('commit failure rolls back under the vault lock and preserves unrelated sta
     wrap_unlock() { d="\${1%%|*}"; rmdir "$d"; }
   `, { mode: 0o600 });
   const scanner = join(f.root, 'scanner.mjs');
-  writeFileSync(scanner, 'process.exit(0);\n', { mode: 0o700 });
+  const scannerFailureMarker = join(f.root, 'scanner-failed-on-staged-record');
+  writeFileSync(scanner, `
+    import { existsSync, writeFileSync } from 'node:fs';
+    import { basename } from 'node:path';
+    const path = process.argv[2];
+    const staged = basename(path).startsWith('.staged-record-');
+    if (!existsSync(process.env.FAKE_LOCK_MARKER) || (staged && !existsSync(process.env.SCANNER_FAILURE_MARKER))) {
+      if (staged) writeFileSync(process.env.SCANNER_FAILURE_MARKER, 'staged\\n', { mode: 0o600 });
+      process.exit(2);
+    }
+  `, { mode: 0o700 });
   const dispositions = join(f.root, 'dispositions.jsonl');
   const drainer = join(f.root, 'drainer.mjs');
   writeFileSync(drainer, `
@@ -1737,14 +1747,17 @@ test('commit failure rolls back under the vault lock and preserves unrelated sta
     WRAP_SCANNER: scanner,
     FAKE_VAULT: vault,
     FAKE_LOCK_MARKER: lockMarker,
+    SCANNER_FAILURE_MARKER: scannerFailureMarker,
   };
   const result = spawnSync(process.execPath, [WRAPPER], { env, encoding: 'utf8' });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /exact-path vault commit failed: exit_72/i);
+  assert.equal(readFileSync(source, 'utf8'), '{"type":"user","message":{"content":"hello"}}\n');
   assert.equal(existsSync(join(vault, 'project-memory', 'documents', 'sessions', 'captured.md')), false);
+  assert.match(result.stderr, /exact-path vault commit failed: exit_72/i);
   assert.equal(spawnSync('git', ['diff', '--cached', '--name-only'], { cwd: vault, encoding: 'utf8' }).stdout.trim(), 'unrelated.txt');
   assert.equal(readFileSync(f.ledger, 'utf8'), '');
   assert.equal(existsSync(lockMarker), false);
+  assert.equal(readFileSync(scannerFailureMarker, 'utf8'), 'staged\n');
   const runRoot = join(f.root, 'logs', 'stray-drain');
   const runDirectory = readdirSync(runRoot).find((name) => name.startsWith('run-'));
   const manifest = join(runRoot, runDirectory, 'rollback', 'recovery-manifest.jsonl');

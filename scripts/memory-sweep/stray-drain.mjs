@@ -3109,7 +3109,6 @@ async function main() {
   }
   const paths = transaction?.paths ?? [];
   if (paths.length) {
-    scanExactRecords({ scanner, paths: transaction.absolutePaths });
     const committed = commitExact({
       vault,
       lib,
